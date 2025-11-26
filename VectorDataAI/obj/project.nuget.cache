@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "vXc5afFjX1c=",
+  "dgSpecHash": "qgvkQUh4yEM=",
   "success": true,
   "projectFilePath": "C:\\Users\\osmany.fajardo\\repos\\.NET_AI_Vector_Search_App\\VectorDataAI\\VectorDataAI.csproj",
   "expectedPackageFiles": [
@@ -27,23 +27,9 @@
     "C:\\Users\\osmany.fajardo\\.nuget\\packages\\microsoft.semantickernel.connectors.inmemory\\1.67.1-preview\\microsoft.semantickernel.connectors.inmemory.1.67.1-preview.nupkg.sha512",
     "C:\\Users\\osmany.fajardo\\.nuget\\packages\\openai\\2.1.0\\openai.2.1.0.nupkg.sha512",
     "C:\\Users\\osmany.fajardo\\.nuget\\packages\\system.clientmodel\\1.8.0\\system.clientmodel.1.8.0.nupkg.sha512",
-    "C:\\Users\\osmany.fajardo\\.nuget\\packages\\system.linq.asyncenumerable\\10.0.0\\system.linq.asyncenumerable.10.0.0.nupkg.sha512",
     "C:\\Users\\osmany.fajardo\\.nuget\\packages\\system.memory.data\\8.0.1\\system.memory.data.8.0.1.nupkg.sha512",
     "C:\\Users\\osmany.fajardo\\.nuget\\packages\\system.numerics.tensors\\9.0.10\\system.numerics.tensors.9.0.10.nupkg.sha512",
     "C:\\Users\\osmany.fajardo\\.nuget\\packages\\system.security.cryptography.protecteddata\\4.5.0\\system.security.cryptography.protecteddata.4.5.0.nupkg.sha512"
   ],
-  "logs": [
-    {
-      "code": "NU1510",
-      "level": "Warning",
-      "message": "PackageReference System.Linq.AsyncEnumerable will not be pruned. Consider removing this package from your dependencies, as it is likely unnecessary.",
-      "projectPath": "C:\\Users\\osmany.fajardo\\repos\\.NET_AI_Vector_Search_App\\VectorDataAI\\VectorDataAI.csproj",
-      "warningLevel": 1,
-      "filePath": "C:\\Users\\osmany.fajardo\\repos\\.NET_AI_Vector_Search_App\\VectorDataAI\\VectorDataAI.csproj",
-      "libraryId": "System.Linq.AsyncEnumerable",
-      "targetGraphs": [
-        "net10.0"
-      ]
-    }
-  ]
+  "logs": []
 }

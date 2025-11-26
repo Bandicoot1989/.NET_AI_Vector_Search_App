@@ -8,11 +8,10 @@ public class CloudService
     public int Key { get; set; }
 
     [VectorStoreData]
-
-    public string Name { get; set; }
+    public required string Name { get; set; }
 
     [VectorStoreData]
-    public string Description { get; set; }
+    public required string Description { get; set; }
 
     [VectorStoreVector(
         Dimensions: 384,

@@ -73,10 +73,6 @@
             "Microsoft.SemanticKernel.Connectors.InMemory": {
               "target": "Package",
               "version": "[1.67.1-preview, )"
-            },
-            "System.Linq.AsyncEnumerable": {
-              "target": "Package",
-              "version": "[10.0.0, )"
             }
           },
           "imports": [

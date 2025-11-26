@@ -409,22 +409,6 @@
           }
         }
       },
-      "System.Linq.AsyncEnumerable/10.0.0": {
-        "type": "package",
-        "compile": {
-          "lib/net10.0/_._": {
-            "related": ".xml"
-          }
-        },
-        "runtime": {
-          "lib/net10.0/_._": {
-            "related": ".xml"
-          }
-        },
-        "build": {
-          "buildTransitive/net8.0/_._": {}
-        }
-      },
       "System.Memory.Data/8.0.1": {
         "type": "package",
         "compile": {
@@ -1093,35 +1077,6 @@
         "system.clientmodel.nuspec"
       ]
     },
-    "System.Linq.AsyncEnumerable/10.0.0": {
-      "sha512": "t1jnw7So3eeZVemma+82w+Y394oPX1bebkr3gY3IzyotP3kKC/JWwGRz2WssoUFODWWvkACT2hXliumgCHu9LQ==",
-      "type": "package",
-      "path": "system.linq.asyncenumerable/10.0.0",
-      "files": [
-        ".nupkg.metadata",
-        ".signature.p7s",
-        "Icon.png",
-        "PACKAGE.md",
-        "THIRD-PARTY-NOTICES.TXT",
-        "buildTransitive/net461/System.Linq.AsyncEnumerable.targets",
-        "buildTransitive/net462/_._",
-        "buildTransitive/net8.0/_._",
-        "buildTransitive/netcoreapp2.0/System.Linq.AsyncEnumerable.targets",
-        "lib/net10.0/System.Linq.AsyncEnumerable.dll",
-        "lib/net10.0/System.Linq.AsyncEnumerable.xml",
-        "lib/net462/System.Linq.AsyncEnumerable.dll",
-        "lib/net462/System.Linq.AsyncEnumerable.xml",
-        "lib/net8.0/System.Linq.AsyncEnumerable.dll",
-        "lib/net8.0/System.Linq.AsyncEnumerable.xml",
-        "lib/net9.0/System.Linq.AsyncEnumerable.dll",
-        "lib/net9.0/System.Linq.AsyncEnumerable.xml",
-        "lib/netstandard2.0/System.Linq.AsyncEnumerable.dll",
-        "lib/netstandard2.0/System.Linq.AsyncEnumerable.xml",
-        "system.linq.asyncenumerable.10.0.0.nupkg.sha512",
-        "system.linq.asyncenumerable.nuspec",
-        "useSharedDesignerContext.txt"
-      ]
-    },
     "System.Memory.Data/8.0.1": {
       "sha512": "BVYuec3jV23EMRDeR7Dr1/qhx7369dZzJ9IWy2xylvb4YfXsrUxspWc4UWYid/tj4zZK58uGZqn2WQiaDMhmAg==",
       "type": "package",
@@ -1229,8 +1184,7 @@
       "Microsoft.Extensions.Configuration >= 10.0.0",
       "Microsoft.Extensions.Configuration.UserSecrets >= 10.0.0",
       "Microsoft.Extensions.VectorData.Abstractions >= 9.7.0",
-      "Microsoft.SemanticKernel.Connectors.InMemory >= 1.67.1-preview",
-      "System.Linq.AsyncEnumerable >= 10.0.0"
+      "Microsoft.SemanticKernel.Connectors.InMemory >= 1.67.1-preview"
     ]
   },
   "packageFolders": {
@@ -1306,10 +1260,6 @@
           "Microsoft.SemanticKernel.Connectors.InMemory": {
             "target": "Package",
             "version": "[1.67.1-preview, )"
-          },
-          "System.Linq.AsyncEnumerable": {
-            "target": "Package",
-            "version": "[10.0.0, )"
           }
         },
         "imports": [
@@ -1605,17 +1555,5 @@
         }
       }
     }
-  },
-  "logs": [
-    {
-      "code": "NU1510",
-      "level": "Warning",
-      "warningLevel": 1,
-      "message": "PackageReference System.Linq.AsyncEnumerable will not be pruned. Consider removing this package from your dependencies, as it is likely unnecessary.",
-      "libraryId": "System.Linq.AsyncEnumerable",
-      "targetGraphs": [
-        "net10.0"
-      ]
-    }
-  ]
+  }
 }
