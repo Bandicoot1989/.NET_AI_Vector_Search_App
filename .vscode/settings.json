@@ -1,4 +1,4 @@
 {
     "appService.defaultWebAppToDeploy": "/subscriptions/55704fab-275d-4637-925a-b667662a45b1/resourceGroups/rg-hq-helpdeskai-poc-001/providers/Microsoft.Web/sites/powershell-scripts-helpdesk",
-    "appService.deploySubpath": "RecipeSearchWeb\\publish"
+    "appService.deploySubpath": "publish"
 }

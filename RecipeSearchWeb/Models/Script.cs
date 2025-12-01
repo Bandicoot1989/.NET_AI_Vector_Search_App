@@ -15,6 +15,10 @@ public class Script
     public string Parameters { get; set; } = string.Empty;  // Parameters explanation
     public ReadOnlyMemory<float> Vector { get; set; }
     
+    // Usage statistics
+    public int ViewCount { get; set; } = 0;
+    public DateTime? LastViewed { get; set; }
+    
     // Helper property for displaying emoji based on category
     public string CategoryEmoji => Category switch
     {

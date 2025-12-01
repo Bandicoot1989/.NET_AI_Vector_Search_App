@@ -1,0 +1,661 @@
+@page "/editor"
+@rendermode InteractiveServer
+@using RecipeSearchWeb.Models
+@using RecipeSearchWeb.Services
+@inject ScriptSearchService ScriptService
+@inject NavigationManager Navigation
+@inject UserStateService UserState
+@inject PersistentComponentState ApplicationState
+@inject AzureAuthService AuthService
+@implements IDisposable
+
+<PageTitle>Script Editor</PageTitle>
+
+<link href="css/weather.css" rel="stylesheet" />
+
+<div class="weather-container">
+    <div class="weather-header">
+        <h1 class="weather-title">
+            💻 PowerShell Script Editor
+        </h1>
+        <p class="weather-subtitle">Create and Manage Your Custom Scripts</p>
+    </div>
+
+    @if (currentUser == null)
+    {
+        <div class="editor-container">
+            <div class="alert alert-error">
+                <h3>🔒 Authentication Required</h3>
+                <p>You must be logged in to access the Script Editor.</p>
+            </div>
+        </div>
+    }
+    else if (!currentUser.IsAdmin)
+    {
+        <div class="editor-container">
+            <div class="alert alert-error">
+                <h3>⛔ Admin Access Required</h3>
+                <p>Only administrators can create and save scripts.</p>
+                <p style="margin-top: 0.5rem;">Current user: <strong>@currentUser.FullName</strong> (@currentUser.Role)</p>
+                <button class="btn-primary" @onclick="GoToHome" style="margin-top: 1rem;">
+                    Return to Library
+                </button>
+            </div>
+        </div>
+    }
+    else
+    {
+    <div class="editor-container">
+        <div class="editor-form">
+            <div class="form-group">
+                <label class="form-label">Script Name</label>
+                <input type="text" @bind="scriptName" class="form-input" placeholder="My Custom Script" />
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Category</label>
+                <select @bind="scriptCategory" class="form-input">
+                    <option value="System Admin">⚙️ System Admin</option>
+                    <option value="File Management">📁 File Management</option>
+                    <option value="Network">🌐 Network</option>
+                    <option value="Security">🔒 Security</option>
+                    <option value="Automation">🤖 Automation</option>
+                    <option value="Azure">☁️ Azure</option>
+                    <option value="Git">📦 Git</option>
+                    <option value="Development">💻 Development</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Complexity</label>
+                <select @bind="scriptComplexity" class="form-input">
+                    <option value="Beginner">Beginner</option>
+                    <option value="Intermediate">Intermediate</option>
+                    <option value="Advanced">Advanced</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Description</label>
+                <textarea @bind="scriptDescription" class="form-textarea" rows="3" placeholder="Brief description of what this script does..."></textarea>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Purpose</label>
+                <input type="text" @bind="scriptPurpose" class="form-input" placeholder="What problem does this solve?" />
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Parameters (Optional)</label>
+                <input type="text" @bind="scriptParameters" class="form-input" placeholder="e.g., -Path [string] (required)" />
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">PowerShell Code</label>
+                <textarea @bind="scriptCode" class="form-code-editor" rows="15" placeholder="# Enter your PowerShell code here..."></textarea>
+            </div>
+
+            <div class="form-actions">
+                <button class="btn-primary" @onclick="SaveScript" disabled="@isSaving">
+                    @if (isSaving)
+                    {
+                        <span>💾 Saving...</span>
+                    }
+                    else if (editingScriptKey.HasValue)
+                    {
+                        <span>💾 Update Script</span>
+                    }
+                    else
+                    {
+                        <span>💾 Save Script</span>
+                    }
+                </button>
+                @if (editingScriptKey.HasValue)
+                {
+                    <button class="btn-secondary" @onclick="CancelEdit">
+                        ❌ Cancel Edit
+                    </button>
+                }
+                <button class="btn-secondary" @onclick="ClearForm">
+                    🔄 Clear All
+                </button>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(saveMessage))
+            {
+                <div class="alert @(saveSuccess ? "alert-success" : "alert-error")">
+                    @saveMessage
+                </div>
+            }
+        </div>
+
+        @* Debug info and reload button *@
+        <div class="debug-section" style="margin-top: 1rem; padding: 1rem; background: #2a2a2a; border: 1px solid #444;">
+            <p style="color: #888; font-size: 0.8rem;">📊 Total custom scripts loaded: @savedScripts.Count</p>
+            <button class="btn-secondary" @onclick="ReloadScripts" style="margin-top: 0.5rem;">
+                🔄 Reload Scripts from Storage
+            </button>
+        </div>
+
+        @if (savedScripts.Any())
+        {
+            <div class="saved-scripts">
+                <h3 class="section-title">📚 Your Saved Scripts (@savedScripts.Count)</h3>
+                <div class="scripts-list">
+                    @foreach (var script in savedScripts)
+                    {
+                        <div class="saved-script-item">
+                            <div class="script-info">
+                                <span class="script-emoji">@GetCategoryEmoji(script.Category)</span>
+                                <div class="script-details">
+                                    <h4>@script.Name</h4>
+                                    <p>@script.Description</p>
+                                    <span class="script-meta">@script.Category • @script.Complexity</span>
+                                </div>
+                            </div>
+                            <div class="script-actions">
+                                <button class="btn-icon" @onclick="() => LoadScript(script)">📝</button>
+                                <button class="btn-icon" @onclick="() => DeleteScript(script)">🗑️</button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="no-scripts" style="margin-top: 1rem; padding: 1rem; background: #1a1a1a; border: 1px dashed #444; text-align: center; color: #666;">
+                <p>No custom scripts saved yet. Create your first script above!</p>
+            </div>
+        }
+    </div>
+    }
+</div>
+
+<style>
+.editor-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+.editor-form {
+    background: #1a1a1a;
+    padding: 2rem;
+    border: 1px solid #2a2a2a;
+    margin-bottom: 2rem;
+}
+
+.form-group {
+    margin-bottom: 1.5rem;
+}
+
+.form-label {
+    display: block;
+    color: #666;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 0.8rem;
+    font-weight: 400;
+}
+
+.form-input,
+.form-textarea,
+.form-code-editor {
+    width: 100%;
+    background: #0a0a0a;
+    border: 1px solid #333;
+    color: #ffffff;
+    padding: 1rem;
+    font-size: 0.95rem;
+    font-weight: 300;
+    border-radius: 0;
+    font-family: inherit;
+}
+
+.form-code-editor {
+    font-family: 'Consolas', 'Courier New', monospace;
+    color: #00ff00;
+    line-height: 1.5;
+}
+
+.form-input:focus,
+.form-textarea:focus,
+.form-code-editor:focus {
+    outline: none;
+    border-color: #666;
+}
+
+.form-actions {
+    display: flex;
+    gap: 1rem;
+    margin-top: 2rem;
+}
+
+.btn-primary,
+.btn-secondary {
+    padding: 1rem 2rem;
+    border: none;
+    cursor: pointer;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    font-weight: 400;
+    transition: all 0.3s ease;
+    border-radius: 0;
+}
+
+.btn-primary {
+    background: #ffffff;
+    color: #000000;
+    border: 1px solid #ffffff;
+}
+
+.btn-primary:hover {
+    background: #000000;
+    color: #ffffff;
+}
+
+.btn-secondary {
+    background: transparent;
+    color: #ffffff;
+    border: 1px solid #333;
+}
+
+.btn-secondary:hover {
+    border-color: #666;
+}
+
+.alert {
+    padding: 1rem;
+    margin-top: 1.5rem;
+    border-radius: 0;
+    font-size: 0.9rem;
+}
+
+.alert-success {
+    background: #1a3a1a;
+    color: #66ff66;
+    border: 1px solid #2a5a2a;
+}
+
+.alert-error {
+    background: #3a1a1a;
+    color: #ff6666;
+    border: 1px solid #5a2a2a;
+}
+
+.test-output {
+    background: #1a1a1a;
+    padding: 2rem;
+    border: 1px solid #2a2a2a;
+    margin-bottom: 2rem;
+}
+
+.output-title {
+    color: #666;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 1rem;
+    font-weight: 400;
+}
+
+.output-console {
+    background: #0a0a0a;
+    padding: 1.5rem;
+    border: 1px solid #333;
+    font-family: 'Consolas', 'Courier New', monospace;
+    color: #00ff00;
+    font-size: 0.9rem;
+    line-height: 1.6;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.saved-scripts {
+    background: #1a1a1a;
+    padding: 2rem;
+    border: 1px solid #2a2a2a;
+}
+
+.section-title {
+    color: #666;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 1.5rem;
+    font-weight: 400;
+}
+
+.scripts-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.saved-script-item {
+    background: #0a0a0a;
+    padding: 1.5rem;
+    border: 1px solid #2a2a2a;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: all 0.3s ease;
+}
+
+.saved-script-item:hover {
+    border-color: #444;
+}
+
+.script-info {
+    display: flex;
+    gap: 1rem;
+    flex: 1;
+}
+
+.script-emoji {
+    font-size: 2rem;
+}
+
+.script-details h4 {
+    color: #ffffff;
+    font-size: 1.1rem;
+    margin: 0 0 0.5rem 0;
+    font-weight: 300;
+}
+
+.script-details p {
+    color: #999;
+    font-size: 0.9rem;
+    margin: 0 0 0.5rem 0;
+}
+
+.script-meta {
+    color: #666;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.script-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.btn-icon {
+    background: transparent;
+    border: 1px solid #333;
+    color: #666;
+    width: 40px;
+    height: 40px;
+    cursor: pointer;
+    font-size: 1.2rem;
+    transition: all 0.3s ease;
+    border-radius: 0;
+}
+
+.btn-icon:hover {
+    border-color: #666;
+    color: #ffffff;
+}
+</style>
+
+@code {
+    private string scriptName = "";
+    private string scriptCategory = "System Admin";
+    private string scriptComplexity = "Beginner";
+    private string scriptDescription = "";
+    private string scriptPurpose = "";
+    private string scriptParameters = "";
+    private string scriptCode = "";
+    private bool isSaving = false;
+    private string saveMessage = "";
+    private bool saveSuccess = false;
+    private List<Script> savedScripts = new();
+    private int? editingScriptKey = null;  // Track which script is being edited
+
+    [CascadingParameter(Name = "CurrentUser")]
+    private User? cascadingUser { get; set; }
+    
+    private User? currentUser;
+    private PersistingComponentStateSubscription _subscription;
+
+    protected override void OnInitialized()
+    {
+        // Register to persist state for prerendering
+        _subscription = ApplicationState.RegisterOnPersisting(PersistState);
+
+        // Strategy 1: Try to restore from PersistentComponentState (works after prerender -> interactive transition)
+        if (ApplicationState.TryTakeFromJson<User>("ScriptEditor_CurrentUser", out var persistedUser) && persistedUser != null)
+        {
+            currentUser = persistedUser;
+            UserState.SetUser(currentUser);
+            return;
+        }
+
+        // Strategy 2: Try to get from AuthService directly (works during prerender when HttpContext is available)
+        var authUser = AuthService.GetCurrentUser();
+        if (authUser != null)
+        {
+            currentUser = authUser;
+            UserState.SetUser(currentUser);
+            return;
+        }
+
+        // Strategy 3: Try UserStateService (might be set by CascadingUserState)
+        if (UserState.CurrentUser != null)
+        {
+            currentUser = UserState.CurrentUser;
+            return;
+        }
+
+        // Strategy 4: Use CascadingParameter as last resort
+        currentUser = cascadingUser;
+    }
+
+    private Task PersistState()
+    {
+        // Persist the current user so it survives the prerender -> interactive transition
+        if (currentUser != null)
+        {
+            ApplicationState.PersistAsJson("ScriptEditor_CurrentUser", currentUser);
+        }
+        return Task.CompletedTask;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (currentUser?.IsAdmin == true)
+        {
+            // Ensure service is initialized
+            await ScriptService.InitializeAsync();
+            // Load any previously saved custom scripts
+            savedScripts = ScriptService.GetCustomScripts();
+        }
+    }
+
+    private bool _hasLoadedScripts = false;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Ensure scripts are loaded even if OnInitializedAsync didn't catch them
+        if (firstRender && currentUser?.IsAdmin == true && !_hasLoadedScripts)
+        {
+            _hasLoadedScripts = true;
+            await ScriptService.InitializeAsync();
+            savedScripts = ScriptService.GetCustomScripts();
+            StateHasChanged();
+        }
+    }
+
+    private async Task ReloadScripts()
+    {
+        try
+        {
+            await ScriptService.InitializeAsync();
+            savedScripts = ScriptService.GetCustomScripts();
+            saveMessage = $"✅ Reloaded {savedScripts.Count} custom scripts from storage.";
+            saveSuccess = true;
+        }
+        catch (Exception ex)
+        {
+            saveMessage = $"❌ Error reloading scripts: {ex.Message}";
+            saveSuccess = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        _subscription.Dispose();
+    }
+
+    private async Task SaveScript()
+    {
+        if (string.IsNullOrWhiteSpace(scriptName) || string.IsNullOrWhiteSpace(scriptCode))
+        {
+            saveMessage = "❌ Please fill in Script Name and Code fields.";
+            saveSuccess = false;
+            return;
+        }
+
+        isSaving = true;
+        saveMessage = "";
+        
+        try
+        {
+            if (editingScriptKey.HasValue)
+            {
+                // Update existing script
+                var existingScript = savedScripts.FirstOrDefault(s => s.Key == editingScriptKey.Value);
+                if (existingScript != null)
+                {
+                    existingScript.Name = scriptName;
+                    existingScript.Category = scriptCategory;
+                    existingScript.Complexity = scriptComplexity;
+                    existingScript.Description = string.IsNullOrWhiteSpace(scriptDescription) ? scriptName : scriptDescription;
+                    existingScript.Purpose = string.IsNullOrWhiteSpace(scriptPurpose) ? "Custom script" : scriptPurpose;
+                    existingScript.Parameters = scriptParameters;
+                    existingScript.Code = scriptCode;
+
+                    await ScriptService.UpdateCustomScriptAsync(existingScript);
+                    
+                    saveMessage = $"✅ Script '{scriptName}' updated successfully!";
+                    saveSuccess = true;
+                    editingScriptKey = null;
+                }
+            }
+            else
+            {
+                // Create new script
+                var nextKey = ScriptService.GetNextAvailableKey();
+                
+                var newScript = new Script
+                {
+                    Key = nextKey,
+                    Name = scriptName,
+                    Category = scriptCategory,
+                    Complexity = scriptComplexity,
+                    Description = string.IsNullOrWhiteSpace(scriptDescription) ? scriptName : scriptDescription,
+                    Purpose = string.IsNullOrWhiteSpace(scriptPurpose) ? "Custom script" : scriptPurpose,
+                    Parameters = scriptParameters,
+                    Code = scriptCode
+                };
+
+                await ScriptService.AddCustomScriptAsync(newScript);
+                savedScripts.Add(newScript);
+                
+                saveMessage = $"✅ Script '{scriptName}' saved successfully! It's now searchable in the library.";
+                saveSuccess = true;
+            }
+            
+            // Clear form after successful save
+            ClearForm();
+        }
+        catch (Exception ex)
+        {
+            saveMessage = $"❌ Error saving script: {ex.Message}";
+            saveSuccess = false;
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private void ClearForm()
+    {
+        scriptName = "";
+        scriptDescription = "";
+        scriptPurpose = "";
+        scriptParameters = "";
+        scriptCode = "";
+        scriptCategory = "System Admin";
+        scriptComplexity = "Beginner";
+        saveMessage = "";
+        editingScriptKey = null;
+    }
+
+    private void CancelEdit()
+    {
+        ClearForm();
+        saveMessage = "Edit cancelled.";
+        saveSuccess = true;
+    }
+
+    private void LoadScript(Script script)
+    {
+        scriptName = script.Name;
+        scriptCategory = script.Category;
+        scriptComplexity = script.Complexity;
+        scriptDescription = script.Description;
+        scriptPurpose = script.Purpose;
+        scriptParameters = script.Parameters;
+        scriptCode = script.Code;
+        editingScriptKey = script.Key;
+        saveMessage = $"📝 Editing script '{script.Name}'. Make changes and click 'Update Script' to save.";
+        saveSuccess = true;
+    }
+
+    private async Task DeleteScript(Script script)
+    {
+        try
+        {
+            await ScriptService.DeleteCustomScriptAsync(script.Key);
+            savedScripts.Remove(script);
+            
+            // Clear form if we were editing this script
+            if (editingScriptKey == script.Key)
+            {
+                ClearForm();
+            }
+            
+            saveMessage = $"🗑️ Script '{script.Name}' deleted permanently.";
+            saveSuccess = true;
+        }
+        catch (Exception ex)
+        {
+            saveMessage = $"❌ Error deleting script: {ex.Message}";
+            saveSuccess = false;
+        }
+    }
+
+    private string GetCategoryEmoji(string category) => category switch
+    {
+        "System Admin" => "⚙️",
+        "File Management" => "📁",
+        "Network" => "🌐",
+        "Security" => "🔒",
+        "Automation" => "🤖",
+        "Azure" => "☁️",
+        "Git" => "📦",
+        "Development" => "💻",
+        _ => "📜"
+    };
+
+    private void GoToHome()
+    {
+        Navigation.NavigateTo("/");
+    }
+}

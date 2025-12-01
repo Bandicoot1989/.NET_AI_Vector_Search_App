@@ -1,6 +1,7 @@
 using Azure.AI.OpenAI;
 using Azure.AI.OpenAI.Embeddings;
 using OpenAI.Embeddings;
+using RecipeSearchWeb.Interfaces;
 using RecipeSearchWeb.Models;
 
 namespace RecipeSearchWeb.Services;
@@ -8,15 +9,17 @@ namespace RecipeSearchWeb.Services;
 /// <summary>
 /// Service that handles PowerShell script searching using AI embeddings
 /// </summary>
-public class ScriptSearchService
+public class ScriptSearchService : IScriptService
 {
     private readonly EmbeddingClient _embeddingClient;
+    private readonly ScriptStorageService _storageService;
     private List<Script> _scripts = new();
     private bool _isInitialized = false;
 
-    public ScriptSearchService(EmbeddingClient embeddingClient)
+    public ScriptSearchService(EmbeddingClient embeddingClient, ScriptStorageService storageService)
     {
         _embeddingClient = embeddingClient;
+        _storageService = storageService;
     }
 
     /// <summary>
@@ -26,12 +29,24 @@ public class ScriptSearchService
     {
         if (_isInitialized) return;
 
+        // Initialize storage
+        await _storageService.InitializeAsync();
+
+        // Load built-in scripts
         _scripts = GetAllScripts();
 
+        // Load custom scripts from storage
+        var customScripts = await _storageService.LoadScriptsAsync();
+        _scripts.AddRange(customScripts);
+
+        // Generate embeddings for all scripts
         foreach (var script in _scripts)
         {
-            var embeddingResponse = await _embeddingClient.GenerateEmbeddingsAsync(new List<string> { script.Description + " " + script.Purpose });
-            script.Vector = embeddingResponse.Value[0].ToFloats();
+            if (script.Vector.Length == 0)
+            {
+                var embeddingResponse = await _embeddingClient.GenerateEmbeddingsAsync(new List<string> { script.Description + " " + script.Purpose });
+                script.Vector = embeddingResponse.Value[0].ToFloats();
+            }
         }
 
         _isInitialized = true;
@@ -68,6 +83,79 @@ public class ScriptSearchService
         var magnitudeA = Math.Sqrt(vectorA.Sum(a => a * a));
         var magnitudeB = Math.Sqrt(vectorB.Sum(b => b * b));
         return dotProduct / (magnitudeA * magnitudeB);
+    }
+
+    /// <summary>
+    /// Add a custom script to the collection and generate its embedding
+    /// </summary>
+    public async Task AddCustomScriptAsync(Script script)
+    {
+        // Generate embedding for the new script
+        var embeddingText = script.Description + " " + script.Purpose;
+        var embeddingResponse = await _embeddingClient.GenerateEmbeddingsAsync(new List<string> { embeddingText });
+        script.Vector = embeddingResponse.Value[0].ToFloats();
+
+        // Add to collection
+        _scripts.Add(script);
+
+        // Persist to Azure Blob Storage
+        await _storageService.SaveScriptsAsync(_scripts);
+    }
+
+    /// <summary>
+    /// Update an existing custom script
+    /// </summary>
+    public async Task UpdateCustomScriptAsync(Script script)
+    {
+        // Find and remove the old script
+        var existingScript = _scripts.FirstOrDefault(s => s.Key == script.Key);
+        if (existingScript != null)
+        {
+            _scripts.Remove(existingScript);
+        }
+
+        // Generate new embedding
+        var embeddingText = script.Description + " " + script.Purpose;
+        var embeddingResponse = await _embeddingClient.GenerateEmbeddingsAsync(new List<string> { embeddingText });
+        script.Vector = embeddingResponse.Value[0].ToFloats();
+
+        // Add updated script
+        _scripts.Add(script);
+
+        // Persist to Azure Blob Storage
+        await _storageService.SaveScriptsAsync(_scripts);
+    }
+
+    /// <summary>
+    /// Delete a custom script
+    /// </summary>
+    public async Task DeleteCustomScriptAsync(int scriptKey)
+    {
+        var script = _scripts.FirstOrDefault(s => s.Key == scriptKey);
+        if (script != null && script.Key >= 1000) // Only allow deleting custom scripts
+        {
+            _scripts.Remove(script);
+            await _storageService.SaveScriptsAsync(_scripts);
+        }
+    }
+
+    /// <summary>
+    /// Get the next available key for a new custom script
+    /// Custom scripts start at Key 1000 to differentiate from built-in scripts
+    /// </summary>
+    public int GetNextAvailableKey()
+    {
+        // Custom scripts must have Key >= 1000
+        var customScripts = _scripts.Where(s => s.Key >= 1000).ToList();
+        return customScripts.Any() ? customScripts.Max(s => s.Key) + 1 : 1000;
+    }
+
+    /// <summary>
+    /// Get all custom scripts (Key >= 1000)
+    /// </summary>
+    public List<Script> GetCustomScripts()
+    {
+        return _scripts.Where(s => s.Key >= 1000).ToList();
     }
 
     public List<Script> GetAllScripts()

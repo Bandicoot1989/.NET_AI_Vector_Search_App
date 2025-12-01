@@ -1,0 +1,376 @@
+@page "/scripts"
+@rendermode InteractiveServer
+@using RecipeSearchWeb.Services
+@using RecipeSearchWeb.Models
+@inject ScriptSearchService ScriptService
+@inject NavigationManager Navigation
+@inject UserStateService UserState
+@inject PersistentComponentState ApplicationState
+@inject AzureAuthService AuthService
+@implements IDisposable
+
+<PageTitle>PowerShell Script Library - Operations One</PageTitle>
+
+<div class="recipe-container">
+    @* Operations Team Info Bar *@
+    <div class="weather-info-bar">
+        <div class="weather-today">
+            <div class="weather-icon-large">⚡</div>
+            <div class="weather-details">
+                <h3>PowerShell Script Library</h3>
+                <div class="weather-temp">Operations Team</div>
+                <div class="weather-condition">Automation & Technical Support</div>
+                <div class="weather-location">Grupo Antolin</div>
+            </div>
+        </div>
+        <div class="weather-suggestion">
+            <div class="suggestion-label">Featured Script</div>
+            <div class="suggested-recipe">@(featuredScript?.Name ?? "Loading...")</div>
+            <div class="suggestion-reason">@(featuredScript?.Purpose ?? "")</div>
+        </div>
+    </div>
+
+    <div class="header-section">
+        <h1 class="main-title">
+            <span class="emoji">💻</span>
+            PowerShell Script Library
+        </h1>
+        <div class="header-subtitle-row">
+            <p class="subtitle">Find and execute scripts for your daily operations</p>
+            @if (currentUser?.IsAdmin == true)
+            {
+                <button class="admin-button" @onclick="GoToEditor">
+                    ⚙️ Admin
+                </button>
+            }
+        </div>
+    </div>
+
+    <div class="search-section">
+        <div class="search-box">
+            <span class="search-icon">🔍</span>
+            <input 
+                type="text" 
+                @bind="searchQuery" 
+                @bind:event="oninput"
+                @onkeyup="HandleKeyPress"
+                placeholder="What do you need? (e.g., 'backup files', 'monitor system', 'find large files')" 
+                class="search-input" />
+            @if (!string.IsNullOrWhiteSpace(searchQuery))
+            {
+                <button class="clear-button" @onclick="ClearSearch">✕</button>
+            }
+        </div>
+        <button class="search-button" @onclick="SearchScripts" disabled="@isSearching">
+            @if (isSearching)
+            {
+                <span class="spinner"></span>
+                <span>Searching...</span>
+            }
+            else
+            {
+                <span>Search Scripts</span>
+            }
+        </button>
+    </div>
+
+    @* Category Filters *@
+    <div class="category-filters">
+        <button class="filter-button @(selectedCategory == "All" ? "active" : "")" @onclick='() => FilterByCategory("All")'>All Scripts</button>
+        <button class="filter-button @(selectedCategory == "System Admin" ? "active" : "")" @onclick='() => FilterByCategory("System Admin")'>⚙️ System Admin</button>
+        <button class="filter-button @(selectedCategory == "File Management" ? "active" : "")" @onclick='() => FilterByCategory("File Management")'>📁 File Management</button>
+        <button class="filter-button @(selectedCategory == "Network" ? "active" : "")" @onclick='() => FilterByCategory("Network")'>🌐 Network</button>
+        <button class="filter-button @(selectedCategory == "Security" ? "active" : "")" @onclick='() => FilterByCategory("Security")'>🔒 Security</button>
+        <button class="filter-button @(selectedCategory == "Automation" ? "active" : "")" @onclick='() => FilterByCategory("Automation")'>🤖 Automation</button>
+        <button class="filter-button @(selectedCategory == "Azure" ? "active" : "")" @onclick='() => FilterByCategory("Azure")'>☁️ Azure</button>
+        <button class="filter-button @(selectedCategory == "Development" ? "active" : "")" @onclick='() => FilterByCategory("Development")'>💻 Development</button>
+    </div>
+
+    @if (isSearching)
+    {
+        <div class="loading-message">
+            <div class="loading-spinner"></div>
+            <p>Finding the perfect scripts for you...</p>
+        </div>
+    }
+    else if (searchResults.Any())
+    {
+        <div class="results-header">
+            <h2>
+                @if (string.IsNullOrWhiteSpace(searchQuery))
+                {
+                    <span>Featured Scripts</span>
+                }
+                else
+                {
+                    <span>Results for "<em>@searchQuery</em>"</span>
+                }
+            </h2>
+            <p class="results-count">Found @searchResults.Count useful scripts</p>
+        </div>
+
+        <div class="recipe-grid">
+            @foreach (var script in searchResults)
+            {
+                <div class="recipe-card" @onclick="() => ShowScriptDetails(script)">
+                    <div class="recipe-header">
+                        <div class="recipe-category">
+                            <span class="category-emoji">@script.CategoryEmoji</span>
+                            <span class="category-name">@script.Category</span>
+                        </div>
+                        <button class="favorite-button @(IsFavorite(script.Key) ? "favorited" : "")" 
+                                @onclick="(e) => ToggleFavorite(script.Key, e)" 
+                                @onclick:stopPropagation="true">
+                            @(IsFavorite(script.Key) ? "⭐" : "☆")
+                        </button>
+                        <h3 class="recipe-name">@script.Name</h3>
+                    </div>
+                    
+                    <div class="recipe-body">
+                        <p class="recipe-description">@script.Description</p>
+                        
+                        <div class="recipe-details">
+                            <div class="detail-item">
+                                <span class="detail-icon">📊</span>
+                                <span class="detail-text difficulty-@script.Complexity.ToLower()">@script.Complexity</span>
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-icon">👁️</span>
+                                <span class="detail-text">@script.ViewCount views</span>
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-icon">🎯</span>
+                                <span class="detail-text">@(script.Purpose.Length > 40 ? script.Purpose.Substring(0, 40) + "..." : script.Purpose)</span>
+                            </div>
+                        </div>
+
+                        <div class="recipe-ingredients">
+                            <strong>⚙️ Purpose:</strong>
+                            <p>@script.Purpose</p>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@* Script Details Modal *@
+@if (selectedScript != null)
+{
+    <div class="modal-overlay" @onclick="CloseModal">
+        <div class="modal-content" @onclick:stopPropagation="true">
+            <button class="modal-close" @onclick="CloseModal">✕</button>
+            
+            <div class="modal-header">
+                <div class="modal-category">
+                    <span class="category-emoji-large">@selectedScript.CategoryEmoji</span>
+                    <span class="category-badge">@selectedScript.Category</span>
+                </div>
+                <h2 class="modal-title">@selectedScript.Name</h2>
+            </div>
+            
+            <div class="modal-body">
+                <div class="modal-section">
+                    <h3>📝 Description</h3>
+                    <p>@selectedScript.Description</p>
+                </div>
+                
+                <div class="modal-meta">
+                    <div class="meta-item">
+                        <span class="meta-icon">📊</span>
+                        <div>
+                            <div class="meta-label">Complexity</div>
+                            <div class="meta-value difficulty-@selectedScript.Complexity.ToLower()">@selectedScript.Complexity</div>
+                        </div>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-icon">🎯</span>
+                        <div>
+                            <div class="meta-label">Purpose</div>
+                            <div class="meta-value">@selectedScript.Purpose</div>
+                        </div>
+                    </div>
+                </div>
+                
+                @if (!string.IsNullOrWhiteSpace(selectedScript.Parameters))
+                {
+                    <div class="modal-section">
+                        <h3>⚙️ Parameters</h3>
+                        <div class="ingredients-list">
+                            <div class="ingredient-item">@selectedScript.Parameters</div>
+                        </div>
+                    </div>
+                }
+                
+                <div class="modal-section">
+                    <h3>💻 PowerShell Code</h3>
+                    <div class="instructions-list">
+                        <pre class="code-block"><code>@selectedScript.Code</code></pre>
+                    </div>
+                    <button class="copy-button" @onclick="CopyCode">📋 Copy to Clipboard</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [CascadingParameter(Name = "CurrentUser")]
+    private User? cascadingUser { get; set; }
+
+    private User? currentUser;
+    private PersistingComponentStateSubscription _subscription;
+    private string searchQuery = "";
+    private List<Script> searchResults = new();
+    private List<Script> allScripts = new();
+    private bool isSearching = false;
+    private Script? selectedScript;
+    private Script? featuredScript;
+    private string selectedCategory = "All";
+    private HashSet<int> favoriteScriptKeys = new();
+
+    protected override void OnInitialized()
+    {
+        // Register to persist state for prerendering
+        _subscription = ApplicationState.RegisterOnPersisting(PersistState);
+
+        // Strategy 1: Try to restore from PersistentComponentState
+        if (ApplicationState.TryTakeFromJson<User>("Scripts_CurrentUser", out var persistedUser) && persistedUser != null)
+        {
+            currentUser = persistedUser;
+            UserState.SetUser(currentUser);
+            return;
+        }
+
+        // Strategy 2: Try to get from AuthService directly
+        var authUser = AuthService.GetCurrentUser();
+        if (authUser != null)
+        {
+            currentUser = authUser;
+            UserState.SetUser(currentUser);
+            return;
+        }
+
+        // Strategy 3: Try UserStateService
+        if (UserState.CurrentUser != null)
+        {
+            currentUser = UserState.CurrentUser;
+            return;
+        }
+
+        // Strategy 4: Use CascadingParameter
+        currentUser = cascadingUser;
+    }
+
+    private Task PersistState()
+    {
+        if (currentUser != null)
+        {
+            ApplicationState.PersistAsJson("Scripts_CurrentUser", currentUser);
+        }
+        return Task.CompletedTask;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        allScripts = await ScriptService.SearchScriptsAsync("", 100);
+        searchResults = allScripts.Take(25).ToList();
+        featuredScript = searchResults.FirstOrDefault();
+        LoadFavorites();
+    }
+
+    private void GoToEditor()
+    {
+        Navigation.NavigateTo("/editor");
+    }
+
+    private async Task SearchScripts()
+    {
+        if (string.IsNullOrWhiteSpace(searchQuery))
+        {
+            searchResults = allScripts.Take(25).ToList();
+            return;
+        }
+
+        isSearching = true;
+        StateHasChanged();
+
+        try
+        {
+            searchResults = await ScriptService.SearchScriptsAsync(searchQuery, 25);
+        }
+        finally
+        {
+            isSearching = false;
+        }
+    }
+
+    private async Task HandleKeyPress(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await SearchScripts();
+        }
+    }
+
+    private void ClearSearch()
+    {
+        searchQuery = "";
+        searchResults = allScripts.Take(25).ToList();
+        selectedCategory = "All";
+    }
+
+    private void ShowScriptDetails(Script script)
+    {
+        selectedScript = script;
+        script.ViewCount++;
+    }
+
+    private void CloseModal()
+    {
+        selectedScript = null;
+    }
+
+    private async Task CopyCode()
+    {
+        await Task.CompletedTask;
+    }
+
+    private async Task FilterByCategory(string category)
+    {
+        selectedCategory = category;
+        
+        if (category == "All")
+        {
+            searchResults = string.IsNullOrWhiteSpace(searchQuery) 
+                ? allScripts.ToList()
+                : await ScriptService.SearchScriptsAsync(searchQuery, 100);
+        }
+        else
+        {
+            var filteredScripts = allScripts.Where(s => s.Category == category).ToList();
+            searchResults = filteredScripts;
+        }
+    }
+
+    private bool IsFavorite(int scriptKey) => favoriteScriptKeys.Contains(scriptKey);
+
+    private void ToggleFavorite(int scriptKey, MouseEventArgs e)
+    {
+        if (favoriteScriptKeys.Contains(scriptKey))
+            favoriteScriptKeys.Remove(scriptKey);
+        else
+            favoriteScriptKeys.Add(scriptKey);
+    }
+
+    private void LoadFavorites()
+    {
+        // Load from local storage in real implementation
+    }
+
+    public void Dispose()
+    {
+        _subscription.Dispose();
+    }
+}

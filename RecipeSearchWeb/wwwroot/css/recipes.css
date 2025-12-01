@@ -111,6 +111,41 @@ body {
     padding: 4rem 2rem 2rem;
 }
 
+.header-subtitle-row {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 2rem;
+    margin-top: 0.5rem;
+}
+
+.header-subtitle-row .subtitle {
+    margin: 0;
+}
+
+.header-subtitle-row .admin-button {
+    position: relative;
+    right: auto;
+    top: auto;
+}
+
+.admin-button {
+    background: transparent;
+    border: 1px solid #00d4ff;
+    color: #00d4ff;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.admin-button:hover {
+    background: rgba(0, 212, 255, 0.1);
+    box-shadow: 0 0 15px rgba(0, 212, 255, 0.3);
+}
+
 .main-title {
     font-size: 4rem;
     color: #ffffff;
@@ -740,3 +775,191 @@ body {
     font-style: italic;
     font-weight: 300;
 }
+
+/* Category Filters */
+.category-filters {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-bottom: 3rem;
+    padding: 2rem 0;
+    border-top: 1px solid #2a2a2a;
+    border-bottom: 1px solid #2a2a2a;
+}
+
+.filter-button {
+    background: transparent;
+    border: 1px solid #333;
+    color: #666;
+    padding: 0.8rem 1.5rem;
+    border-radius: 0;
+    cursor: pointer;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    font-weight: 400;
+    transition: all 0.3s ease;
+}
+
+.filter-button:hover {
+    border-color: #666;
+    color: #ffffff;
+}
+
+.filter-button.active {
+    background: #ffffff;
+    color: #000000;
+    border-color: #ffffff;
+}
+
+/* Favorites Button */
+.favorite-button {
+    position: absolute;
+    top: 1.5rem;
+    right: 1.5rem;
+    background: transparent;
+    border: 1px solid #333;
+    color: #666;
+    width: 36px;
+    height: 36px;
+    border-radius: 0;
+    cursor: pointer;
+    font-size: 1.2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+    z-index: 5;
+}
+
+.favorite-button:hover {
+    border-color: #666;
+    color: #ffffff;
+    transform: scale(1.1);
+}
+
+.favorite-button.favorited {
+    background: #ffffff;
+    color: #000000;
+    border-color: #ffffff;
+}
+
+/* Comments Section */
+.comments-section {
+    background: #1a1a1a;
+    padding: 1.5rem;
+    border: 1px solid #2a2a2a;
+}
+
+.comment-item {
+    padding: 1rem 0;
+    border-bottom: 1px solid #2a2a2a;
+}
+
+.comment-item:last-of-type {
+    border-bottom: none;
+}
+
+.comment-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+}
+
+.comment-author {
+    color: #ffffff;
+    font-weight: 400;
+    font-size: 0.9rem;
+}
+
+.comment-time {
+    color: #666;
+    font-size: 0.75rem;
+}
+
+.comment-text {
+    color: #999;
+    line-height: 1.6;
+    font-size: 0.95rem;
+}
+
+.add-comment {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid #2a2a2a;
+}
+
+.comment-input {
+    flex: 1;
+    background: #0a0a0a;
+    border: 1px solid #333;
+    color: #ffffff;
+    padding: 0.8rem 1rem;
+    border-radius: 0;
+    font-size: 0.9rem;
+    font-weight: 300;
+}
+
+.comment-input::placeholder {
+    color: #666;
+}
+
+.comment-submit {
+    background: #ffffff;
+    color: #000000;
+    border: none;
+    padding: 0.8rem 2rem;
+    border-radius: 0;
+    cursor: pointer;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    font-weight: 400;
+    transition: all 0.3s ease;
+}
+
+.comment-submit:hover {
+    background: #000000;
+    color: #ffffff;
+    border: 1px solid #ffffff;
+}
+
+/* Stats Grid */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2rem;
+    background: #1a1a1a;
+    padding: 2rem;
+    border: 1px solid #2a2a2a;
+}
+
+.stat-item {
+    text-align: center;
+    padding: 1rem;
+    border-right: 1px solid #2a2a2a;
+}
+
+.stat-item:last-child {
+    border-right: none;
+}
+
+.stat-label {
+    display: block;
+    color: #666;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 0.8rem;
+}
+
+.stat-value {
+    display: block;
+    color: #ffffff;
+    font-size: 1.5rem;
+    font-weight: 300;
+}
+

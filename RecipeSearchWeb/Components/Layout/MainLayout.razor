@@ -1,6 +1,7 @@
 ﻿@inherits LayoutComponentBase
 
 <div class="page">
+    <div class="tech-background"></div>
     <div class="sidebar">
         <NavMenu />
     </div>
@@ -15,6 +16,9 @@
         </article>
     </main>
 </div>
+
+@* Knowledge Base AI Assistant Chat *@
+<KnowledgeChat @rendermode="InteractiveServer" />
 
 <div id="blazor-error-ui" data-nosnippet>
     An unhandled error has occurred.

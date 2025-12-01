@@ -1,0 +1,616 @@
+@page "/agent-context"
+@using RecipeSearchWeb.Models
+@using RecipeSearchWeb.Services
+@inject ContextSearchService ContextService
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Agent Context - Operations One Centre</PageTitle>
+
+<div class="context-manager">
+    <div class="page-header">
+        <h1>🧠 Agent Context Manager</h1>
+        <p class="subtitle">Upload Excel files to give the Knowledge Assistant additional context (ticket categories, URLs, reference data)</p>
+    </div>
+
+    @* Upload Section *@
+    <div class="upload-section card">
+        <h3>📤 Upload Context File</h3>
+        <div class="upload-form">
+            <div class="form-group">
+                <label>Category</label>
+                <input type="text" @bind="uploadCategory" placeholder="e.g., ServiceDesk Tickets, URLs, Contacts" class="form-control" />
+            </div>
+            <div class="form-group">
+                <label>Excel File (.xlsx)</label>
+                <InputFile OnChange="HandleFileSelected" accept=".xlsx,.xls" class="form-control" />
+            </div>
+            @if (selectedFile != null)
+            {
+                <div class="selected-file">
+                    <span>📄 @selectedFile.Name (@FormatSize(selectedFile.Size))</span>
+                </div>
+            }
+            <button class="btn-upload" @onclick="UploadFile" disabled="@(isUploading || selectedFile == null || string.IsNullOrWhiteSpace(uploadCategory))">
+                @if (isUploading)
+                {
+                    <span>⏳ Importing...</span>
+                }
+                else
+                {
+                    <span>📥 Import File</span>
+                }
+            </button>
+        </div>
+        @if (!string.IsNullOrEmpty(uploadMessage))
+        {
+            <div class="upload-message @(uploadSuccess ? "success" : "error")">
+                @uploadMessage
+            </div>
+        }
+    </div>
+
+    @* Context Files List *@
+    <div class="files-section card">
+        <h3>📁 Context Files (@contextFiles.Count)</h3>
+        
+        @if (!contextFiles.Any())
+        {
+            <div class="empty-state">
+                <span class="empty-icon">📂</span>
+                <p>No context files uploaded yet.</p>
+                <p class="hint">Upload an Excel file to give the assistant more knowledge!</p>
+            </div>
+        }
+        else
+        {
+            <div class="files-grid">
+                @foreach (var file in contextFiles)
+                {
+                    <div class="file-card">
+                        <div class="file-icon">📊</div>
+                        <div class="file-info">
+                            <h4>@file.FileName</h4>
+                            <span class="file-category">@file.Category</span>
+                            <div class="file-meta">
+                                <span>📝 @file.EntryCount entries</span>
+                                <span>📅 @file.UploadedAt.ToString("MMM dd, yyyy")</span>
+                            </div>
+                        </div>
+                        <div class="file-actions">
+                            <button class="btn-view" @onclick="() => ViewFileEntries(file.FileName)" title="View entries">
+                                👁️
+                            </button>
+                            <button class="btn-delete" @onclick="() => DeleteFile(file.FileName)" title="Delete file">
+                                🗑️
+                            </button>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+
+    @* File Entries Modal *@
+    @if (showEntriesModal)
+    {
+        <div class="modal-overlay" @onclick="CloseEntriesModal">
+            <div class="modal-content" @onclick:stopPropagation>
+                <div class="modal-header">
+                    <h3>📄 @viewingFileName</h3>
+                    <button class="modal-close" @onclick="CloseEntriesModal">✕</button>
+                </div>
+                <div class="modal-body">
+                    <div class="entries-table-container">
+                        <table class="entries-table">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Description</th>
+                                    <th>Keywords</th>
+                                    <th>Link</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var entry in viewingEntries)
+                                {
+                                    <tr>
+                                        <td>@entry.Name</td>
+                                        <td class="desc-cell">@TruncateText(entry.Description, 100)</td>
+                                        <td class="keywords-cell">@entry.Keywords</td>
+                                        <td>
+                                            @if (!string.IsNullOrEmpty(entry.Link))
+                                            {
+                                                <a href="@entry.Link" target="_blank" class="entry-link">🔗</a>
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+
+    @* Statistics *@
+    <div class="stats-section card">
+        <h3>📊 Statistics</h3>
+        <div class="stats-grid">
+            <div class="stat-item">
+                <span class="stat-value">@contextFiles.Count</span>
+                <span class="stat-label">Files</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value">@totalEntries</span>
+                <span class="stat-label">Total Entries</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value">@categories.Count</span>
+                <span class="stat-label">Categories</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<ContextFile> contextFiles = new();
+    private List<string> categories = new();
+    private int totalEntries = 0;
+    
+    private IBrowserFile? selectedFile;
+    private string uploadCategory = string.Empty;
+    private bool isUploading = false;
+    private string uploadMessage = string.Empty;
+    private bool uploadSuccess = false;
+    
+    private bool showEntriesModal = false;
+    private string viewingFileName = string.Empty;
+    private List<ContextDocument> viewingEntries = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadData();
+    }
+
+    private async Task LoadData()
+    {
+        contextFiles = await ContextService.GetFilesAsync();
+        categories = await ContextService.GetCategoriesAsync();
+        totalEntries = ContextService.GetDocumentCount();
+    }
+
+    private void HandleFileSelected(InputFileChangeEventArgs e)
+    {
+        selectedFile = e.File;
+        uploadMessage = string.Empty;
+    }
+
+    private async Task UploadFile()
+    {
+        if (selectedFile == null || string.IsNullOrWhiteSpace(uploadCategory))
+            return;
+
+        isUploading = true;
+        uploadMessage = string.Empty;
+        StateHasChanged();
+
+        try
+        {
+            // Max 10MB
+            using var stream = selectedFile.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+            using var memoryStream = new MemoryStream();
+            await stream.CopyToAsync(memoryStream);
+            memoryStream.Position = 0;
+
+            var (imported, message) = await ContextService.ImportExcelAsync(
+                memoryStream, 
+                selectedFile.Name, 
+                uploadCategory, 
+                "admin"); // TODO: Get actual user
+
+            uploadSuccess = imported > 0;
+            uploadMessage = message;
+
+            if (uploadSuccess)
+            {
+                selectedFile = null;
+                uploadCategory = string.Empty;
+                await LoadData();
+            }
+        }
+        catch (Exception ex)
+        {
+            uploadSuccess = false;
+            uploadMessage = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            isUploading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ViewFileEntries(string fileName)
+    {
+        viewingFileName = fileName;
+        viewingEntries = await ContextService.GetDocumentsByFileAsync(fileName);
+        showEntriesModal = true;
+    }
+
+    private void CloseEntriesModal()
+    {
+        showEntriesModal = false;
+        viewingFileName = string.Empty;
+        viewingEntries.Clear();
+    }
+
+    private async Task DeleteFile(string fileName)
+    {
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Are you sure you want to delete '{fileName}' and all its entries?");
+        if (confirmed)
+        {
+            await ContextService.DeleteFileAsync(fileName);
+            await LoadData();
+        }
+    }
+
+    private string FormatSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024} KB";
+        return $"{bytes / (1024 * 1024)} MB";
+    }
+
+    private string TruncateText(string text, int maxLength)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        return text.Length <= maxLength ? text : text.Substring(0, maxLength) + "...";
+    }
+}
+
+<style>
+    .context-manager {
+        padding: 20px;
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+
+    .page-header {
+        margin-bottom: 30px;
+    }
+
+    .page-header h1 {
+        color: #00d4ff;
+        font-size: 2rem;
+        margin-bottom: 10px;
+    }
+
+    .subtitle {
+        color: #888;
+        font-size: 1rem;
+    }
+
+    .card {
+        background: linear-gradient(145deg, #1a1a2e 0%, #16213e 100%);
+        border: 1px solid rgba(0, 212, 255, 0.2);
+        border-radius: 12px;
+        padding: 25px;
+        margin-bottom: 25px;
+    }
+
+    .card h3 {
+        color: #00d4ff;
+        margin-bottom: 20px;
+        font-size: 1.2rem;
+    }
+
+    /* Upload Section */
+    .upload-form {
+        display: flex;
+        flex-direction: column;
+        gap: 15px;
+    }
+
+    .form-group {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+    }
+
+    .form-group label {
+        color: #aaa;
+        font-size: 0.9rem;
+    }
+
+    .form-control {
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(0, 212, 255, 0.3);
+        border-radius: 8px;
+        padding: 12px 15px;
+        color: #fff;
+        font-size: 1rem;
+    }
+
+    .form-control:focus {
+        outline: none;
+        border-color: #00d4ff;
+    }
+
+    .selected-file {
+        color: #00d4ff;
+        font-size: 0.9rem;
+    }
+
+    .btn-upload {
+        background: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
+        border: none;
+        border-radius: 8px;
+        padding: 12px 24px;
+        color: #000;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        align-self: flex-start;
+    }
+
+    .btn-upload:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 20px rgba(0, 212, 255, 0.3);
+    }
+
+    .btn-upload:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    .upload-message {
+        padding: 12px 15px;
+        border-radius: 8px;
+        margin-top: 10px;
+    }
+
+    .upload-message.success {
+        background: rgba(0, 255, 136, 0.1);
+        border: 1px solid rgba(0, 255, 136, 0.3);
+        color: #00ff88;
+    }
+
+    .upload-message.error {
+        background: rgba(255, 77, 77, 0.1);
+        border: 1px solid rgba(255, 77, 77, 0.3);
+        color: #ff4d4d;
+    }
+
+    /* Files Section */
+    .empty-state {
+        text-align: center;
+        padding: 40px;
+        color: #666;
+    }
+
+    .empty-icon {
+        font-size: 3rem;
+        display: block;
+        margin-bottom: 15px;
+    }
+
+    .hint {
+        font-size: 0.85rem;
+        color: #555;
+    }
+
+    .files-grid {
+        display: grid;
+        gap: 15px;
+    }
+
+    .file-card {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        background: rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(0, 212, 255, 0.1);
+        border-radius: 10px;
+        padding: 15px;
+        transition: all 0.3s ease;
+    }
+
+    .file-card:hover {
+        border-color: rgba(0, 212, 255, 0.3);
+        background: rgba(0, 0, 0, 0.3);
+    }
+
+    .file-icon {
+        font-size: 2rem;
+    }
+
+    .file-info {
+        flex: 1;
+    }
+
+    .file-info h4 {
+        color: #fff;
+        margin: 0 0 5px 0;
+        font-size: 1rem;
+    }
+
+    .file-category {
+        display: inline-block;
+        background: rgba(0, 212, 255, 0.2);
+        color: #00d4ff;
+        padding: 3px 10px;
+        border-radius: 12px;
+        font-size: 0.75rem;
+        margin-bottom: 8px;
+    }
+
+    .file-meta {
+        display: flex;
+        gap: 15px;
+        color: #666;
+        font-size: 0.8rem;
+    }
+
+    .file-actions {
+        display: flex;
+        gap: 8px;
+    }
+
+    .file-actions button {
+        background: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        padding: 8px 12px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+
+    .btn-view:hover {
+        background: rgba(0, 212, 255, 0.2);
+        border-color: #00d4ff;
+    }
+
+    .btn-delete:hover {
+        background: rgba(255, 77, 77, 0.2);
+        border-color: #ff4d4d;
+    }
+
+    /* Modal */
+    .modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.8);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        padding: 20px;
+    }
+
+    .modal-content {
+        background: #1a1a2e;
+        border: 1px solid rgba(0, 212, 255, 0.3);
+        border-radius: 12px;
+        max-width: 900px;
+        width: 100%;
+        max-height: 80vh;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 20px;
+        border-bottom: 1px solid rgba(0, 212, 255, 0.2);
+    }
+
+    .modal-header h3 {
+        color: #00d4ff;
+        margin: 0;
+    }
+
+    .modal-close {
+        background: transparent;
+        border: none;
+        color: #fff;
+        font-size: 1.5rem;
+        cursor: pointer;
+        padding: 5px 10px;
+    }
+
+    .modal-body {
+        padding: 20px;
+        overflow: auto;
+    }
+
+    .entries-table-container {
+        overflow-x: auto;
+    }
+
+    .entries-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .entries-table th,
+    .entries-table td {
+        padding: 12px;
+        text-align: left;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .entries-table th {
+        color: #00d4ff;
+        font-weight: 600;
+        background: rgba(0, 0, 0, 0.2);
+    }
+
+    .entries-table td {
+        color: #ccc;
+        font-size: 0.9rem;
+    }
+
+    .desc-cell {
+        max-width: 300px;
+    }
+
+    .keywords-cell {
+        max-width: 200px;
+        color: #888 !important;
+        font-size: 0.8rem !important;
+    }
+
+    .entry-link {
+        text-decoration: none;
+        font-size: 1.2rem;
+    }
+
+    /* Stats Section */
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 20px;
+    }
+
+    .stat-item {
+        text-align: center;
+        padding: 20px;
+        background: rgba(0, 0, 0, 0.2);
+        border-radius: 10px;
+    }
+
+    .stat-value {
+        display: block;
+        font-size: 2rem;
+        font-weight: bold;
+        color: #00d4ff;
+    }
+
+    .stat-label {
+        color: #888;
+        font-size: 0.9rem;
+    }
+
+    @@media (max-width: 768px) {
+        .stats-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .file-card {
+            flex-direction: column;
+            text-align: center;
+        }
+
+        .file-meta {
+            flex-direction: column;
+            gap: 5px;
+        }
+    }
+</style>

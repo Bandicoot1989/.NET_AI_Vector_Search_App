@@ -1,0 +1,2138 @@
+@page "/knowledge"
+@page "/knowledge/{KBNumber}"
+@rendermode InteractiveServer
+@using RecipeSearchWeb.Models
+@using RecipeSearchWeb.Services
+@inject KnowledgeSearchService KnowledgeService
+@inject MarkdownRenderService MarkdownService
+@inject NavigationManager Navigation
+@inject UserStateService UserState
+@inject PersistentComponentState ApplicationState
+@inject AzureAuthService AuthService
+@inject IJSRuntime JS
+@implements IDisposable
+
+<PageTitle>Knowledge Base - Operations One</PageTitle>
+
+<div class="knowledge-container">
+    <div class="section-header">
+        <div class="header-icon">📚</div>
+        <div class="header-content">
+            <h1>Knowledge Base</h1>
+            <div class="subtitle-row">
+                <p class="subtitle">Documentation and procedures for daily operations</p>
+                @if (currentUser?.IsAdmin == true)
+                {
+                    <button class="admin-button" @onclick="GoToAdmin">
+                        ⚙️ Admin
+                    </button>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="search-section">
+        <div class="search-row">
+            <div class="search-box">
+                <span class="search-icon">🔍</span>
+                <input 
+                    type="text" 
+                    @bind="searchQuery" 
+                    @bind:event="oninput"
+                    @onkeyup="HandleSearchKeyUp"
+                    placeholder="Search documentation by title, content, KB number, or tags..." 
+                    class="search-input" />
+                @if (!string.IsNullOrWhiteSpace(searchQuery))
+                {
+                    <button class="search-clear" @onclick="ClearSearch">✕</button>
+                }
+            </div>
+            <div class="search-stats">
+                @if (isSearching)
+                {
+                    <span>🔄 Searching...</span>
+                }
+                else if (!string.IsNullOrWhiteSpace(searchQuery))
+                {
+                    <span>Found @filteredArticles.Count articles</span>
+                }
+                else
+                {
+                    <span>@allArticles.Count total articles • Select a category or search</span>
+                }
+            </div>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(searchQuery) && filteredArticles.Any())
+    {
+        <div class="search-results">
+            <h2 class="results-title">🔍 Search Results</h2>
+            <div class="articles-list">
+                @foreach (var article in filteredArticles)
+                {
+                    <div class="article-card" @onclick="() => OpenArticle(article)">
+                        <div class="article-icon">📄</div>
+                        <div class="article-info">
+                            <div class="article-header">
+                                <h4>@article.Title</h4>
+                                <span class="kb-number">@article.KBNumber</span>
+                            </div>
+                            <p class="article-summary">@article.ShortDescription</p>
+                            <div class="article-meta">
+                                <span class="article-group">📁 @article.KBGroup</span>
+                                <span class="article-date">📅 @article.LastUpdated.ToString("MMM dd, yyyy")</span>
+                                <span class="article-owner">👤 @article.KBOwner</span>
+                            </div>
+                            <div class="article-tags">
+                                @foreach (var tag in article.Tags.Take(5))
+                                {
+                                    <span class="tag">@tag</span>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+    else if (!string.IsNullOrWhiteSpace(searchQuery) && !filteredArticles.Any())
+    {
+        <div class="no-results">
+            <span class="no-results-icon">🔍</span>
+            <h3>No articles found</h3>
+            <p>Try different keywords or browse by category below</p>
+        </div>
+    }
+
+    @if (string.IsNullOrWhiteSpace(searchQuery))
+    {
+        <div class="categories-grid">
+            @foreach (var group in groupsWithCounts)
+            {
+                <div class="category-card @(selectedGroup == group.Key ? "selected" : "")" @onclick="() => SelectGroup(group.Key)">
+                    <div class="category-icon">@GetGroupIcon(group.Key)</div>
+                    <h3>@group.Key</h3>
+                    <p>@GetGroupDescription(group.Key)</p>
+                    <span class="doc-count">@group.Value documents</span>
+                </div>
+            }
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(selectedGroup))
+    {
+        <div class="documents-section">
+            <div class="section-title">
+                <span class="back-button" @onclick="ClearGroup">← Back to categories</span>
+                <h2>@GetGroupIcon(selectedGroup) @selectedGroup</h2>
+            </div>
+
+            <div class="articles-list">
+                @foreach (var article in groupArticles)
+                {
+                    <div class="article-card" @onclick="() => OpenArticle(article)">
+                        <div class="article-icon">📄</div>
+                        <div class="article-info">
+                            <div class="article-header">
+                                <h4>@article.Title</h4>
+                                <span class="kb-number">@article.KBNumber</span>
+                            </div>
+                            <p class="article-summary">@article.ShortDescription</p>
+                            <div class="article-meta">
+                                <span class="article-date">📅 @article.LastUpdated.ToString("MMM dd, yyyy")</span>
+                                <span class="article-owner">👤 @article.KBOwner</span>
+                                <span class="article-readers">👥 @article.TargetReaders</span>
+                            </div>
+                            <div class="article-tags">
+                                @foreach (var tag in article.Tags.Take(5))
+                                {
+                                    <span class="tag">@tag</span>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+    @* Article Detail Modal *@
+    @if (selectedArticle != null)
+    {
+        <div class="modal-overlay @(isLightMode ? "light-mode" : "")" @onclick="CloseArticle">
+            <div class="modal-content article-modal @(isLightMode ? "light-mode" : "")" @onclick:stopPropagation="true">
+                <div class="modal-toolbar">
+                    <button class="theme-toggle" @onclick="ToggleTheme" @onclick:stopPropagation="true" title="@(isLightMode ? "Switch to Dark Mode" : "Switch to Light Mode")">
+                        @(isLightMode ? "🌙" : "☀️")
+                    </button>
+                    <button class="modal-close" @onclick="CloseArticle">✕</button>
+                </div>
+                
+                <div class="article-detail-header">
+                    <div class="kb-badge">@selectedArticle.KBNumber</div>
+                    <h2>@selectedArticle.Title</h2>
+                    <p class="article-purpose">@selectedArticle.Purpose</p>
+                </div>
+
+                <div class="article-metadata">
+                    <div class="meta-row">
+                        <span class="meta-label">KB Group:</span>
+                        <span class="meta-value">@selectedArticle.KBGroup</span>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Owner:</span>
+                        <span class="meta-value">@selectedArticle.KBOwner</span>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Target Readers:</span>
+                        <span class="meta-value">@selectedArticle.TargetReaders</span>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Last Updated:</span>
+                        <span class="meta-value">@selectedArticle.LastUpdated.ToString("MMMM dd, yyyy")</span>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Language:</span>
+                        <span class="meta-value">@selectedArticle.Language</span>
+                    </div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(selectedArticle.Context))
+                {
+                    <div class="article-section">
+                        <h3>📋 Context</h3>
+                        <p>@selectedArticle.Context</p>
+                    </div>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(selectedArticle.AppliesTo))
+                {
+                    <div class="article-section">
+                        <h3>👥 Applies To</h3>
+                        <p>@selectedArticle.AppliesTo</p>
+                    </div>
+                }
+
+                <div class="article-content-section">
+                    <h3>📖 Content</h3>
+                    
+                    @if (!string.IsNullOrWhiteSpace(selectedArticle.OriginalPdfUrl))
+                    {
+                        @* Embedded PDF Viewer - Shows the original document with perfect formatting *@
+                        <div class="pdf-viewer-container">
+                            <div class="pdf-toolbar">
+                                <a href="@selectedArticle.OriginalPdfUrl" target="_blank" class="pdf-open-btn" title="Open in new tab">
+                                    📄 Open PDF in New Tab
+                                </a>
+                                <a href="@selectedArticle.OriginalPdfUrl" download class="pdf-download-btn" title="Download PDF">
+                                    ⬇️ Download
+                                </a>
+                                <button class="pdf-fullscreen-btn" @onclick="TogglePdfFullscreen" title="Toggle fullscreen">
+                                    @(isPdfFullscreen ? "⛶ Exit Fullscreen" : "⛶ Fullscreen")
+                                </button>
+                            </div>
+                            <div class="pdf-embed-wrapper @(isPdfFullscreen ? "fullscreen" : "")">
+                                <iframe 
+                                    src="@selectedArticle.OriginalPdfUrl#toolbar=1&navpanes=1&scrollbar=1&view=FitH" 
+                                    class="pdf-iframe"
+                                    title="@selectedArticle.Title"
+                                    allowfullscreen>
+                                </iframe>
+                            </div>
+                        </div>
+                        
+                        @* Collapsible text content for search context *@
+                        @if (!string.IsNullOrWhiteSpace(selectedArticle.Content))
+                        {
+                            <details class="text-content-details">
+                                <summary>📝 Text Content (for reference)</summary>
+                                <div class="markdown-content text-fallback">
+                                    @((MarkupString)ConvertMarkdownToHtmlWithImages(selectedArticle.Content, selectedArticle.Images))
+                                </div>
+                            </details>
+                        }
+                    }
+                    else if (!string.IsNullOrWhiteSpace(selectedArticle.Content))
+                    {
+                        @* Fallback to markdown rendering when no PDF available *@
+                        <div class="markdown-content">
+                            @((MarkupString)ConvertMarkdownToHtmlWithImages(selectedArticle.Content, selectedArticle.Images))
+                        </div>
+                    }
+                    else
+                    {
+                        @* No content available - show message to re-import *@
+                        <div class="no-content-message">
+                            <div class="no-content-icon">📄</div>
+                            <p>This article was imported before the PDF viewer feature.</p>
+                            <p><strong>To see the full document with images:</strong></p>
+                            <ol>
+                                <li>Go to <strong>Admin</strong></li>
+                                <li>Delete this article</li>
+                                <li>Re-import the original PDF document</li>
+                            </ol>
+                        </div>
+                    }
+                </div>
+
+                <div class="article-tags-section">
+                    <h3>🏷️ Tags</h3>
+                    <div class="tags-list">
+                        @foreach (var tag in selectedArticle.Tags)
+                        {
+                            <span class="tag clickable" @onclick="() => SearchByTag(tag)" @onclick:stopPropagation="true">@tag</span>
+                        }
+                    </div>
+                </div>
+
+                @if (currentUser?.IsAdmin == true)
+                {
+                    <div class="article-admin-actions">
+                        <button class="btn-edit" @onclick="() => EditCurrentArticle()" @onclick:stopPropagation="true">
+                            ✏️ Edit Article
+                        </button>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+    @* Image Fullscreen Modal - JS based for dynamically rendered images *@
+    <div id="imageFullscreenModal" class="image-fullscreen-modal" style="display:none;" onclick="closeImageFullscreen()">
+        <button class="fullscreen-close" onclick="closeImageFullscreen()">✕</button>
+        <img id="fullscreenModalImage" src="" alt="" />
+        <div id="fullscreenImageCaption" class="fullscreen-caption"></div>
+    </div>
+
+    @* Legacy fullscreen - keeping for backward compatibility *@
+    @if (fullscreenImage != null)
+    {
+        <div class="fullscreen-overlay" @onclick="CloseFullscreenImage">
+            <img src="@fullscreenImage.BlobUrl" alt="@fullscreenImage.AltText" />
+            <button class="fullscreen-close" @onclick="CloseFullscreenImage">✕</button>
+        </div>
+    }
+</div>
+
+<script>
+    // Global function for opening images in fullscreen from dynamically rendered content
+    function openImageFullscreen(src, alt) {
+        var modal = document.getElementById('imageFullscreenModal');
+        var img = document.getElementById('fullscreenModalImage');
+        var caption = document.getElementById('fullscreenImageCaption');
+        
+        if (modal && img) {
+            img.src = src;
+            img.alt = alt || 'Image';
+            caption.textContent = alt || '';
+            modal.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
+        }
+    }
+
+    function closeImageFullscreen() {
+        var modal = document.getElementById('imageFullscreenModal');
+        if (modal) {
+            modal.style.display = 'none';
+            document.body.style.overflow = '';
+        }
+    }
+
+    // Close on Escape key
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeImageFullscreen();
+        }
+    });
+</script>
+
+<style>
+.knowledge-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+.section-header {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+    padding: 2rem;
+    background: linear-gradient(135deg, rgba(0, 212, 255, 0.1) 0%, rgba(0, 0, 0, 0.3) 100%);
+    border: 1px solid rgba(0, 212, 255, 0.2);
+    border-radius: 4px;
+}
+
+.header-icon {
+    font-size: 3rem;
+}
+
+.header-content {
+    flex: 1;
+}
+
+.subtitle-row {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    margin-top: 0.5rem;
+}
+
+.subtitle-row .subtitle {
+    margin: 0;
+}
+
+.subtitle-row .admin-button {
+    background: transparent;
+    border: 1px solid #00d4ff;
+    color: #00d4ff;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.subtitle-row .admin-button:hover {
+    background: rgba(0, 212, 255, 0.1);
+    box-shadow: 0 0 15px rgba(0, 212, 255, 0.3);
+}
+
+.header-content h1 {
+    font-size: 2rem;
+    font-weight: 300;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: #00d4ff;
+    margin: 0;
+}
+
+.header-content .subtitle {
+    color: #888;
+    font-size: 0.9rem;
+    margin-top: 0.5rem;
+}
+
+/* Search Section */
+.search-section {
+    margin-bottom: 2rem;
+}
+
+.search-row {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+}
+
+.search-box {
+    display: flex;
+    align-items: center;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    padding: 0.75rem 1rem;
+    max-width: 800px;
+    transition: border-color 0.3s ease;
+}
+
+.search-box:focus-within {
+    border-color: #00d4ff;
+}
+
+.search-icon {
+    margin-right: 0.75rem;
+    font-size: 1.2rem;
+}
+
+.search-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: #fff;
+    font-size: 1rem;
+    outline: none;
+}
+
+.search-input::placeholder {
+    color: #666;
+}
+
+.search-clear {
+    background: none;
+    border: none;
+    color: #666;
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    font-size: 1rem;
+}
+
+.search-clear:hover {
+    color: #fff;
+}
+
+.search-stats {
+    font-size: 0.85rem;
+    color: #666;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+/* Categories Grid */
+.categories-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.category-card {
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    padding: 1.5rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.category-card:hover,
+.category-card.selected {
+    border-color: #00d4ff;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(0, 212, 255, 0.1);
+}
+
+.category-card.selected {
+    background: rgba(0, 212, 255, 0.05);
+}
+
+.category-icon {
+    font-size: 2.5rem;
+    margin-bottom: 1rem;
+}
+
+.category-card h3 {
+    font-size: 1.1rem;
+    font-weight: 400;
+    color: #fff;
+    margin-bottom: 0.5rem;
+}
+
+.category-card p {
+    color: #888;
+    font-size: 0.85rem;
+    margin-bottom: 1rem;
+}
+
+.doc-count {
+    color: #00d4ff;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+/* Articles List */
+.articles-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.article-card {
+    display: flex;
+    gap: 1rem;
+    padding: 1.5rem;
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.article-card:hover {
+    border-color: #00d4ff;
+    background: #1f1f1f;
+}
+
+.article-icon {
+    font-size: 2rem;
+    flex-shrink: 0;
+}
+
+.article-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.article-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+}
+
+.article-header h4 {
+    font-size: 1rem;
+    font-weight: 500;
+    color: #fff;
+    margin: 0;
+}
+
+.kb-number {
+    font-size: 0.75rem;
+    color: #00d4ff;
+    background: rgba(0, 212, 255, 0.1);
+    padding: 0.25rem 0.5rem;
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+
+.article-summary {
+    color: #888;
+    font-size: 0.85rem;
+    margin-bottom: 0.75rem;
+}
+
+.article-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    font-size: 0.75rem;
+    color: #666;
+    margin-bottom: 0.75rem;
+}
+
+.article-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.tag {
+    font-size: 0.7rem;
+    color: #888;
+    background: #252525;
+    padding: 0.2rem 0.5rem;
+    border-radius: 3px;
+}
+
+.tag.clickable {
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.tag.clickable:hover {
+    background: #00d4ff;
+    color: #000;
+}
+
+/* Search Results */
+.search-results {
+    margin-bottom: 2rem;
+}
+
+.results-title {
+    font-size: 1.2rem;
+    font-weight: 400;
+    color: #fff;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #333;
+}
+
+.no-results {
+    text-align: center;
+    padding: 3rem;
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    margin-bottom: 2rem;
+}
+
+.no-results-icon {
+    font-size: 3rem;
+    display: block;
+    margin-bottom: 1rem;
+}
+
+.no-results h3 {
+    color: #fff;
+    margin-bottom: 0.5rem;
+}
+
+.no-results p {
+    color: #666;
+}
+
+/* Documents Section */
+.documents-section {
+    margin-top: 2rem;
+}
+
+.section-title {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.back-button {
+    color: #00d4ff;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: color 0.2s ease;
+}
+
+.back-button:hover {
+    color: #fff;
+}
+
+.section-title h2 {
+    font-size: 1.5rem;
+    font-weight: 300;
+    color: #fff;
+    margin: 0;
+}
+
+/* Modal Styles */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.9);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 2rem;
+    overflow-y: auto;
+}
+
+.modal-content {
+    background: #111;
+    border: 1px solid #333;
+    padding: 2rem;
+    position: relative;
+    width: 100%;
+}
+
+.article-modal {
+    max-width: 900px;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.modal-close {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    background: none;
+    border: none;
+    color: #888;
+    font-size: 1.5rem;
+    cursor: pointer;
+    z-index: 10;
+}
+
+.modal-close:hover {
+    color: #fff;
+}
+
+/* Article Detail */
+.article-detail-header {
+    border-bottom: 1px solid #333;
+    padding-bottom: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.kb-badge {
+    display: inline-block;
+    font-size: 0.8rem;
+    color: #00d4ff;
+    background: rgba(0, 212, 255, 0.1);
+    border: 1px solid rgba(0, 212, 255, 0.3);
+    padding: 0.3rem 0.75rem;
+    border-radius: 3px;
+    margin-bottom: 0.75rem;
+}
+
+.article-detail-header h2 {
+    font-size: 1.5rem;
+    font-weight: 400;
+    color: #fff;
+    margin-bottom: 0.75rem;
+}
+
+.article-purpose {
+    color: #888;
+    font-size: 0.9rem;
+    line-height: 1.6;
+}
+
+.article-metadata {
+    background: #0a0a0a;
+    border: 1px solid #222;
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 0.75rem;
+}
+
+.meta-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.meta-label {
+    font-size: 0.7rem;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.meta-value {
+    font-size: 0.85rem;
+    color: #ccc;
+}
+
+.article-section {
+    margin-bottom: 1.5rem;
+}
+
+.article-section h3 {
+    font-size: 1rem;
+    font-weight: 500;
+    color: #00d4ff;
+    margin-bottom: 0.75rem;
+}
+
+.article-section p {
+    color: #ccc;
+    line-height: 1.7;
+    font-size: 0.9rem;
+}
+
+.article-content-section {
+    margin-bottom: 1.5rem;
+}
+
+.article-content-section h3 {
+    font-size: 1rem;
+    font-weight: 500;
+    color: #00d4ff;
+    margin-bottom: 1rem;
+}
+
+/* ========================================
+   Embedded PDF Viewer Styles
+   ======================================== */
+.pdf-viewer-container {
+    background: #1a1a2e;
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 1.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.pdf-toolbar {
+    display: flex;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    background: #0f0f1a;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.pdf-open-btn,
+.pdf-download-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: rgba(99, 102, 241, 0.2);
+    color: #a5b4fc;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    border-radius: 6px;
+    text-decoration: none;
+    font-size: 0.875rem;
+    transition: all 0.2s ease;
+}
+
+.pdf-open-btn:hover,
+.pdf-download-btn:hover {
+    background: rgba(99, 102, 241, 0.3);
+    color: #c7d2fe;
+    transform: translateY(-1px);
+}
+
+.pdf-fullscreen-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: rgba(16, 185, 129, 0.2);
+    color: #6ee7b7;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    border-radius: 6px;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    margin-left: auto;
+}
+
+.pdf-fullscreen-btn:hover {
+    background: rgba(16, 185, 129, 0.3);
+    color: #a7f3d0;
+    transform: translateY(-1px);
+}
+
+.pdf-embed-wrapper {
+    position: relative;
+    width: 100%;
+    height: 70vh;
+    min-height: 500px;
+    background: #f0f0f0;
+    transition: all 0.3s ease;
+}
+
+.pdf-embed-wrapper.fullscreen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 100vh;
+    width: 100vw;
+    z-index: 10000;
+    border-radius: 0;
+    min-height: unset;
+}
+
+.pdf-iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+}
+
+/* Text content details for PDFs */
+.text-content-details {
+    margin-top: 1.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.text-content-details summary {
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.05);
+    color: #888;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: all 0.2s ease;
+}
+
+.text-content-details summary:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #aaa;
+}
+
+.text-content-details[open] summary {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.text-fallback {
+    padding: 1.5rem;
+    background: rgba(0, 0, 0, 0.2);
+    font-size: 0.9rem;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+/* Light mode adjustments for PDF viewer */
+.light-mode .pdf-viewer-container {
+    background: #f8f9fa;
+    border-color: #dee2e6;
+}
+
+.light-mode .pdf-toolbar {
+    background: #e9ecef;
+    border-color: #dee2e6;
+}
+
+.light-mode .pdf-open-btn,
+.light-mode .pdf-download-btn {
+    background: rgba(99, 102, 241, 0.1);
+    color: #4f46e5;
+    border-color: rgba(99, 102, 241, 0.2);
+}
+
+.light-mode .pdf-fullscreen-btn {
+    background: rgba(16, 185, 129, 0.1);
+    color: #059669;
+    border-color: rgba(16, 185, 129, 0.2);
+}
+
+.light-mode .text-content-details {
+    border-color: #dee2e6;
+}
+
+.light-mode .text-content-details summary {
+    background: #f1f3f5;
+    color: #495057;
+}
+
+.light-mode .text-fallback {
+    background: #fff;
+}
+
+/* No content message */
+.no-content-message {
+    text-align: center;
+    padding: 3rem 2rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 12px;
+    border: 1px dashed rgba(255, 255, 255, 0.2);
+}
+
+.no-content-icon {
+    font-size: 4rem;
+    margin-bottom: 1rem;
+    opacity: 0.5;
+}
+
+.no-content-message p {
+    color: #888;
+    margin: 0.5rem 0;
+}
+
+.no-content-message ol {
+    text-align: left;
+    display: inline-block;
+    margin: 1rem 0;
+    color: #aaa;
+}
+
+.no-content-message ol li {
+    margin: 0.5rem 0;
+}
+
+.light-mode .no-content-message {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.2);
+}
+
+.light-mode .no-content-message p {
+    color: #666;
+}
+
+.light-mode .no-content-message ol {
+    color: #555;
+}
+
+/* ========================================
+   KB Content - Professional Markdown Styles
+   ======================================== */
+.markdown-content {
+    color: #ccc;
+    line-height: 1.8;
+    font-size: 1rem;
+}
+
+/* Container from MarkdownRenderService */
+.markdown-content .kb-content {
+    width: 100%;
+}
+
+/* Paragraphs */
+.markdown-content p {
+    margin-bottom: 1.2rem;
+    line-height: 1.8;
+    text-align: justify;
+}
+
+/* Headers */
+.markdown-content h1 {
+    font-size: 1.6rem;
+    font-weight: 600;
+    color: #fff;
+    margin-top: 2rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid #00d4ff;
+}
+
+.markdown-content h2 {
+    font-size: 1.3rem;
+    font-weight: 500;
+    color: #fff;
+    margin-top: 1.75rem;
+    margin-bottom: 0.85rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #333;
+}
+
+.markdown-content h3 {
+    font-size: 1.15rem;
+    font-weight: 500;
+    color: #e0e0e0;
+    margin-top: 1.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.markdown-content h4 {
+    font-size: 1.05rem;
+    font-weight: 500;
+    color: #d0d0d0;
+    margin-top: 1.25rem;
+    margin-bottom: 0.6rem;
+}
+
+/* Lists */
+.markdown-content ul,
+.markdown-content ol {
+    padding-left: 1.75rem;
+    margin-bottom: 1.2rem;
+}
+
+.markdown-content ul {
+    list-style-type: disc;
+}
+
+.markdown-content ol {
+    list-style-type: decimal;
+}
+
+.markdown-content li {
+    margin-bottom: 0.6rem;
+    line-height: 1.7;
+}
+
+.markdown-content li > ul,
+.markdown-content li > ol {
+    margin-top: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+/* Strong and Emphasis */
+.markdown-content strong {
+    color: #fff;
+    font-weight: 600;
+}
+
+.markdown-content em {
+    color: #e0e0e0;
+    font-style: italic;
+}
+
+/* Code - Inline */
+.markdown-content code {
+    background: #0a0a0a;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    color: #00ff88;
+    font-size: 0.9rem;
+    border: 1px solid #222;
+}
+
+/* Code - Blocks */
+.markdown-content pre {
+    background: #0a0a0a;
+    border: 1px solid #222;
+    border-radius: 6px;
+    padding: 1rem 1.25rem;
+    margin: 1.5rem 0;
+    overflow-x: auto;
+}
+
+.markdown-content pre code {
+    background: transparent;
+    padding: 0;
+    border: none;
+    color: #00ff88;
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+/* Blockquotes */
+.markdown-content blockquote {
+    border-left: 4px solid #00d4ff;
+    background: rgba(0, 212, 255, 0.05);
+    margin: 1.5rem 0;
+    padding: 1rem 1.5rem;
+    font-style: italic;
+    color: #aaa;
+}
+
+.markdown-content blockquote p {
+    margin-bottom: 0.5rem;
+}
+
+.markdown-content blockquote p:last-child {
+    margin-bottom: 0;
+}
+
+/* Links */
+.markdown-content a {
+    color: #00d4ff;
+    text-decoration: none;
+    border-bottom: 1px dotted #00d4ff;
+    transition: all 0.2s ease;
+}
+
+.markdown-content a:hover {
+    color: #33e0ff;
+    border-bottom-style: solid;
+}
+
+/* Tables */
+.markdown-content table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.5rem 0;
+    font-size: 0.95rem;
+}
+
+.markdown-content th {
+    background: #1a1a1a;
+    color: #00d4ff;
+    font-weight: 600;
+    padding: 0.75rem 1rem;
+    text-align: left;
+    border: 1px solid #333;
+}
+
+.markdown-content td {
+    padding: 0.75rem 1rem;
+    border: 1px solid #333;
+    vertical-align: top;
+}
+
+.markdown-content tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.markdown-content tr:hover {
+    background: rgba(0, 212, 255, 0.05);
+}
+
+/* Horizontal Rules */
+.markdown-content hr {
+    border: none;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, #333, transparent);
+    margin: 2rem 0;
+}
+
+/* Task Lists */
+.markdown-content input[type="checkbox"] {
+    margin-right: 0.5rem;
+    accent-color: #00d4ff;
+}
+
+/* Images - Enhanced with figures */
+.markdown-content .kb-image {
+    margin: 1.5rem 0;
+    text-align: center;
+    max-width: 100%;
+}
+
+.markdown-content .kb-image img,
+.markdown-content .clickable-image {
+    max-width: 100%;
+    height: auto;
+    border-radius: 6px;
+    border: 1px solid #333;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.markdown-content .kb-image img:hover,
+.markdown-content .clickable-image:hover {
+    border-color: #00d4ff;
+    box-shadow: 0 6px 20px rgba(0, 212, 255, 0.2);
+    transform: scale(1.01);
+}
+
+.markdown-content figure {
+    margin: 1.5rem 0;
+    text-align: center;
+}
+
+.markdown-content figcaption {
+    font-size: 0.85rem;
+    color: #888;
+    font-style: italic;
+    margin-top: 0.75rem;
+    padding: 0 1rem;
+}
+
+/* Standard markdown images (not in figure) */
+.markdown-content img:not(.clickable-image) {
+    max-width: 100%;
+    height: auto;
+    border-radius: 6px;
+    border: 1px solid #333;
+    margin: 1rem 0;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.markdown-content img:not(.clickable-image):hover {
+    border-color: #00d4ff;
+}
+
+/* Inline images */
+.markdown-content .inline-image {
+    margin: 1.5rem auto;
+    max-width: 100%;
+    text-align: center;
+}
+
+.markdown-content .inline-image img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+/* KB Image Gallery */
+.kb-image-gallery {
+    margin-top: 2rem;
+    padding: 1.5rem;
+    background: rgba(0, 212, 255, 0.05);
+    border: 1px solid rgba(0, 212, 255, 0.2);
+    border-radius: 12px;
+}
+
+.kb-image-gallery h4 {
+    color: #00d4ff;
+    margin: 0 0 1rem 0;
+    font-size: 1.1rem;
+}
+
+.gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 1.5rem;
+}
+
+.gallery-item {
+    margin: 0;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transition: all 0.3s ease;
+}
+
+.gallery-item:hover {
+    border-color: #00d4ff;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(0, 212, 255, 0.2);
+}
+
+.gallery-item img {
+    width: 100%;
+    height: 180px;
+    object-fit: cover;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.gallery-item img:hover {
+    opacity: 0.9;
+}
+
+.gallery-item figcaption {
+    padding: 0.75rem;
+    font-size: 0.85rem;
+    color: #aaa;
+    text-align: center;
+    background: rgba(0, 0, 0, 0.4);
+}
+
+/* Light mode gallery */
+.light-mode .kb-image-gallery {
+    background: rgba(99, 102, 241, 0.05);
+    border-color: rgba(99, 102, 241, 0.2);
+}
+
+.light-mode .kb-image-gallery h4 {
+    color: #4f46e5;
+}
+
+.light-mode .gallery-item {
+    background: #fff;
+    border-color: #e5e7eb;
+}
+
+.light-mode .gallery-item:hover {
+    border-color: #4f46e5;
+    box-shadow: 0 4px 20px rgba(79, 70, 229, 0.2);
+}
+
+.light-mode .gallery-item figcaption {
+    color: #666;
+    background: #f9fafb;
+}
+
+/* Images at end section */
+.markdown-content .images-at-end {
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid #333;
+}
+
+/* Definition Lists */
+.markdown-content dl {
+    margin: 1.5rem 0;
+}
+
+.markdown-content dt {
+    font-weight: 600;
+    color: #fff;
+    margin-top: 1rem;
+}
+
+.markdown-content dd {
+    margin-left: 1.5rem;
+    margin-bottom: 0.5rem;
+    color: #ccc;
+}
+
+.article-tags-section {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid #333;
+}
+
+.article-tags-section h3 {
+    font-size: 0.9rem;
+    font-weight: 400;
+    color: #888;
+    margin-bottom: 0.75rem;
+}
+
+.tags-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+/* Article Images Section */
+.article-images-section {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid #333;
+}
+
+.article-images-section h3 {
+    font-size: 0.9rem;
+    font-weight: 400;
+    color: #888;
+    margin-bottom: 0.75rem;
+}
+
+.images-gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1rem;
+}
+
+.gallery-image {
+    cursor: pointer;
+    overflow: hidden;
+    border: 1px solid #333;
+    transition: all 0.2s;
+}
+
+.gallery-image:hover {
+    border-color: #00d4ff;
+}
+
+.gallery-image img {
+    width: 100%;
+    height: 150px;
+    object-fit: cover;
+    display: block;
+}
+
+.image-caption {
+    display: block;
+    padding: 0.5rem;
+    font-size: 0.8rem;
+    color: #888;
+    background: #0d0d0d;
+}
+
+/* Fullscreen Image Modal - Legacy */
+.fullscreen-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.95);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+    cursor: pointer;
+}
+
+.fullscreen-overlay img {
+    max-width: 95%;
+    max-height: 95%;
+    object-fit: contain;
+}
+
+.fullscreen-close {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    background: rgba(255, 255, 255, 0.1);
+    border: none;
+    color: #fff;
+    font-size: 2rem;
+    width: 50px;
+    height: 50px;
+    cursor: pointer;
+    border-radius: 50%;
+    z-index: 2001;
+}
+
+.fullscreen-close:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+/* Image Fullscreen Modal - JS based for dynamic content */
+.image-fullscreen-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.97);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 3000;
+    cursor: pointer;
+    padding: 2rem;
+}
+
+.image-fullscreen-modal img {
+    max-width: 95%;
+    max-height: 85%;
+    object-fit: contain;
+    border-radius: 4px;
+    box-shadow: 0 10px 50px rgba(0, 0, 0, 0.5);
+}
+
+.image-fullscreen-modal .fullscreen-caption {
+    margin-top: 1rem;
+    color: #aaa;
+    font-size: 0.95rem;
+    text-align: center;
+    max-width: 80%;
+    font-style: italic;
+}
+
+/* Article Admin Actions */
+.article-admin-actions {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid #333;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.btn-edit {
+    background: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
+    border: none;
+    color: #000;
+    padding: 0.75rem 1.5rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-edit:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(0, 212, 255, 0.4);
+}
+
+/* Modal Toolbar */
+.modal-toolbar {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    display: flex;
+    gap: 0.5rem;
+    z-index: 10;
+}
+
+.theme-toggle {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid #333;
+    color: #888;
+    font-size: 1.2rem;
+    width: 40px;
+    height: 40px;
+    cursor: pointer;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.theme-toggle:hover {
+    background: rgba(255, 255, 255, 0.2);
+    border-color: #00d4ff;
+}
+
+.modal-close {
+    position: relative;
+    top: 0;
+    right: 0;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid #333;
+    color: #888;
+    font-size: 1.2rem;
+    width: 40px;
+    height: 40px;
+    cursor: pointer;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.modal-close:hover {
+    background: rgba(255, 68, 68, 0.2);
+    border-color: #ff4444;
+    color: #ff4444;
+}
+
+/* Inline Images in Content */
+.inline-image {
+    margin: 1.5rem 0;
+    text-align: center;
+}
+
+.inline-image img {
+    max-width: 100%;
+    height: auto;
+    border: 1px solid #333;
+    border-radius: 4px;
+    cursor: zoom-in;
+    transition: all 0.2s;
+}
+
+.inline-image img:hover {
+    border-color: #00d4ff;
+    box-shadow: 0 4px 20px rgba(0, 212, 255, 0.2);
+}
+
+.inline-image figcaption {
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    color: #888;
+    font-style: italic;
+}
+
+.images-at-end {
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid #333;
+}
+
+.images-at-end::before {
+    content: "📸 Images";
+    display: block;
+    font-size: 0.9rem;
+    color: #888;
+    margin-bottom: 1rem;
+}
+
+/* ============================================
+   LIGHT MODE STYLES
+   ============================================ */
+.modal-overlay.light-mode {
+    background: rgba(255, 255, 255, 0.95);
+}
+
+.article-modal.light-mode {
+    background: #ffffff;
+    border: 1px solid #e0e0e0;
+    color: #333;
+}
+
+.article-modal.light-mode .article-detail-header {
+    border-bottom-color: #e0e0e0;
+}
+
+.article-modal.light-mode .kb-badge {
+    background: rgba(0, 150, 200, 0.1);
+    border-color: rgba(0, 150, 200, 0.3);
+    color: #0096c8;
+}
+
+.article-modal.light-mode h2 {
+    color: #222;
+}
+
+.article-modal.light-mode .article-purpose {
+    color: #555;
+}
+
+.article-modal.light-mode .article-metadata {
+    background: #f8f9fa;
+    border-color: #e0e0e0;
+}
+
+.article-modal.light-mode .meta-label {
+    color: #888;
+}
+
+.article-modal.light-mode .meta-value {
+    color: #333;
+}
+
+.article-modal.light-mode .article-section h3,
+.article-modal.light-mode .article-content-section h3 {
+    color: #0096c8;
+}
+
+.article-modal.light-mode .article-section p {
+    color: #444;
+}
+
+.article-modal.light-mode .markdown-content {
+    color: #333;
+}
+
+.article-modal.light-mode .markdown-content h2 {
+    color: #222;
+    border-bottom-color: #e0e0e0;
+}
+
+.article-modal.light-mode .markdown-content h3 {
+    color: #333;
+}
+
+.article-modal.light-mode .markdown-content strong {
+    color: #111;
+}
+
+.article-modal.light-mode .markdown-content code {
+    background: #f0f0f0;
+    color: #c7254e;
+    border: 1px solid #e0e0e0;
+}
+
+.article-modal.light-mode .markdown-content pre {
+    background: #f8f9fa;
+    border: 1px solid #e0e0e0;
+    padding: 1rem;
+    border-radius: 4px;
+    overflow-x: auto;
+}
+
+.article-modal.light-mode .markdown-content pre code {
+    background: transparent;
+    border: none;
+    color: #333;
+}
+
+.article-modal.light-mode .markdown-content ul {
+    color: #444;
+}
+
+.article-modal.light-mode .article-tags-section {
+    border-top-color: #e0e0e0;
+}
+
+.article-modal.light-mode .article-tags-section h3 {
+    color: #666;
+}
+
+.article-modal.light-mode .tag {
+    background: #e8e8e8;
+    color: #555;
+}
+
+.article-modal.light-mode .tag.clickable:hover {
+    background: #0096c8;
+    color: #fff;
+}
+
+.article-modal.light-mode .article-admin-actions {
+    border-top-color: #e0e0e0;
+}
+
+.article-modal.light-mode .theme-toggle {
+    background: #f0f0f0;
+    border-color: #ddd;
+    color: #666;
+}
+
+.article-modal.light-mode .theme-toggle:hover {
+    background: #e0e0e0;
+    border-color: #0096c8;
+}
+
+.article-modal.light-mode .modal-close {
+    background: #f0f0f0;
+    border-color: #ddd;
+    color: #666;
+}
+
+.article-modal.light-mode .modal-close:hover {
+    background: #ffeeee;
+    border-color: #ff4444;
+    color: #ff4444;
+}
+
+.article-modal.light-mode .inline-image img {
+    border-color: #ddd;
+}
+
+.article-modal.light-mode .inline-image img:hover {
+    border-color: #0096c8;
+    box-shadow: 0 4px 20px rgba(0, 150, 200, 0.2);
+}
+
+.article-modal.light-mode .inline-image figcaption {
+    color: #666;
+}
+
+.article-modal.light-mode .images-at-end {
+    border-top-color: #e0e0e0;
+}
+
+.article-modal.light-mode .images-at-end::before {
+    color: #666;
+}
+
+/* Light Mode - Additional Markdown Elements */
+.article-modal.light-mode .markdown-content p {
+    color: #444;
+}
+
+.article-modal.light-mode .markdown-content h1 {
+    color: #111;
+    border-bottom-color: #0096c8;
+}
+
+.article-modal.light-mode .markdown-content h4 {
+    color: #333;
+}
+
+.article-modal.light-mode .markdown-content a {
+    color: #0096c8;
+    border-bottom-color: #0096c8;
+}
+
+.article-modal.light-mode .markdown-content a:hover {
+    color: #00b4e8;
+}
+
+.article-modal.light-mode .markdown-content blockquote {
+    background: rgba(0, 150, 200, 0.05);
+    border-left-color: #0096c8;
+    color: #555;
+}
+
+.article-modal.light-mode .markdown-content table {
+    border-color: #e0e0e0;
+}
+
+.article-modal.light-mode .markdown-content th {
+    background: #f0f0f0;
+    color: #0096c8;
+    border-color: #e0e0e0;
+}
+
+.article-modal.light-mode .markdown-content td {
+    border-color: #e0e0e0;
+    color: #333;
+}
+
+.article-modal.light-mode .markdown-content tr:nth-child(even) {
+    background: rgba(0, 0, 0, 0.02);
+}
+
+.article-modal.light-mode .markdown-content tr:hover {
+    background: rgba(0, 150, 200, 0.05);
+}
+
+.article-modal.light-mode .markdown-content hr {
+    background: linear-gradient(90deg, transparent, #ddd, transparent);
+}
+
+.article-modal.light-mode .markdown-content .kb-image img,
+.article-modal.light-mode .markdown-content .clickable-image {
+    border-color: #ddd;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.article-modal.light-mode .markdown-content .kb-image img:hover,
+.article-modal.light-mode .markdown-content .clickable-image:hover {
+    border-color: #0096c8;
+    box-shadow: 0 6px 20px rgba(0, 150, 200, 0.15);
+}
+
+.article-modal.light-mode .markdown-content figcaption {
+    color: #666;
+}
+
+.article-modal.light-mode .markdown-content img:not(.clickable-image) {
+    border-color: #ddd;
+}
+
+.article-modal.light-mode .markdown-content img:not(.clickable-image):hover {
+    border-color: #0096c8;
+}
+</style>
+
+@code {
+    [Parameter]
+    public string? KBNumber { get; set; }
+
+    [CascadingParameter(Name = "CurrentUser")]
+    private User? cascadingUser { get; set; }
+
+    private User? currentUser;
+    private PersistingComponentStateSubscription _subscription;
+    private string searchQuery = "";
+    private string selectedGroup = "";
+    private KnowledgeArticle? selectedArticle;
+    private KBImage? fullscreenImage;
+    private List<KnowledgeArticle> allArticles = new();
+    private List<KnowledgeArticle> filteredArticles = new();
+    private List<KnowledgeArticle> groupArticles = new();
+    private Dictionary<string, int> groupsWithCounts = new();
+    private bool isSearching = false;
+    private bool isLightMode = false;
+    private bool isPdfFullscreen = false;
+    private System.Timers.Timer? searchDebounceTimer;
+
+    protected override void OnInitialized()
+    {
+        // Register to persist state for prerendering
+        _subscription = ApplicationState.RegisterOnPersisting(PersistState);
+
+        // Strategy 1: Try to restore from PersistentComponentState
+        if (ApplicationState.TryTakeFromJson<User>("Knowledge_CurrentUser", out var persistedUser) && persistedUser != null)
+        {
+            currentUser = persistedUser;
+            UserState.SetUser(currentUser);
+            return;
+        }
+
+        // Strategy 2: Try to get from AuthService directly (works during prerender)
+        var authUser = AuthService.GetCurrentUser();
+        if (authUser != null)
+        {
+            currentUser = authUser;
+            UserState.SetUser(currentUser);
+            return;
+        }
+
+        // Strategy 3: Try UserStateService
+        if (UserState.CurrentUser != null)
+        {
+            currentUser = UserState.CurrentUser;
+            return;
+        }
+
+        // Strategy 4: Use CascadingParameter as last resort
+        currentUser = cascadingUser;
+    }
+
+    private Task PersistState()
+    {
+        if (currentUser != null)
+        {
+            ApplicationState.PersistAsJson("Knowledge_CurrentUser", currentUser);
+        }
+        return Task.CompletedTask;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        allArticles = KnowledgeService.GetAllArticles();
+        groupsWithCounts = KnowledgeService.GetGroupsWithCounts();
+
+        // If a KB number is provided in the URL, open that article
+        if (!string.IsNullOrWhiteSpace(KBNumber))
+        {
+            selectedArticle = KnowledgeService.GetArticleByKBNumber(KBNumber);
+        }
+    }
+
+    private void GoToAdmin()
+    {
+        Navigation.NavigateTo("/knowledge/admin");
+    }
+
+    private void EditCurrentArticle()
+    {
+        if (selectedArticle != null)
+        {
+            Navigation.NavigateTo("/knowledge/admin");
+        }
+    }
+
+    private void OpenImageFullscreen(KBImage image)
+    {
+        fullscreenImage = image;
+    }
+
+    private void CloseFullscreenImage()
+    {
+        fullscreenImage = null;
+    }
+
+    private async Task HandleSearchKeyUp(KeyboardEventArgs e)
+    {
+        // Debounce search
+        searchDebounceTimer?.Stop();
+        searchDebounceTimer?.Dispose();
+        
+        searchDebounceTimer = new System.Timers.Timer(300);
+        searchDebounceTimer.Elapsed += async (s, e) =>
+        {
+            await InvokeAsync(async () =>
+            {
+                await PerformSearch();
+                StateHasChanged();
+            });
+        };
+        searchDebounceTimer.AutoReset = false;
+        searchDebounceTimer.Start();
+    }
+
+    private async Task PerformSearch()
+    {
+        if (string.IsNullOrWhiteSpace(searchQuery))
+        {
+            filteredArticles.Clear();
+            return;
+        }
+
+        isSearching = true;
+        StateHasChanged();
+
+        try
+        {
+            // Use quick text search for immediate results
+            // For AI-powered search, use: filteredArticles = await KnowledgeService.SearchArticlesAsync(searchQuery);
+            filteredArticles = KnowledgeService.QuickSearch(searchQuery);
+        }
+        finally
+        {
+            isSearching = false;
+        }
+    }
+
+    private void ClearSearch()
+    {
+        searchQuery = "";
+        filteredArticles.Clear();
+    }
+
+    private void SelectGroup(string group)
+    {
+        selectedGroup = group;
+        groupArticles = KnowledgeService.GetArticlesByGroup(group);
+    }
+
+    private void ClearGroup()
+    {
+        selectedGroup = "";
+        groupArticles.Clear();
+    }
+
+    private void OpenArticle(KnowledgeArticle article)
+    {
+        selectedArticle = article;
+    }
+
+    private void CloseArticle()
+    {
+        selectedArticle = null;
+    }
+
+    private void SearchByTag(string tag)
+    {
+        searchQuery = tag;
+        CloseArticle();
+        _ = PerformSearch();
+    }
+
+    private string GetGroupIcon(string group) => group switch
+    {
+        "My WorkPlace" => "🏢",
+        "Security" => "🔒",
+        "Network" => "🌐",
+        "Software" => "💿",
+        "Hardware" => "🖥️",
+        "Procedures" => "📋",
+        "Policies" => "📜",
+        "Troubleshooting" => "🔧",
+        _ => "📁"
+    };
+
+    private string GetGroupDescription(string group) => group switch
+    {
+        "My WorkPlace" => "Workplace tools, equipment, and daily operations",
+        "Security" => "Security policies, protocols, and best practices",
+        "Network" => "Network configuration and connectivity guides",
+        "Software" => "Software installation and troubleshooting",
+        "Hardware" => "Hardware setup and maintenance procedures",
+        "Procedures" => "Standard operating procedures and workflows",
+        "Policies" => "Company IT policies and compliance",
+        "Troubleshooting" => "Common issues and resolution guides",
+        _ => "Documentation and guides"
+    };
+
+    private void ToggleTheme()
+    {
+        isLightMode = !isLightMode;
+    }
+
+    private void TogglePdfFullscreen()
+    {
+        isPdfFullscreen = !isPdfFullscreen;
+        StateHasChanged();
+    }
+
+    private string ConvertMarkdownToHtmlWithImages(string markdown, List<KBImage> images)
+    {
+        // Use the professional Markdig-based service
+        return MarkdownService.RenderToHtml(markdown, images);
+    }
+
+    private string ConvertMarkdownToHtml(string markdown)
+    {
+        return ConvertMarkdownToHtmlWithImages(markdown, new List<KBImage>());
+    }
+
+    public void Dispose()
+    {
+        searchDebounceTimer?.Stop();
+        searchDebounceTimer?.Dispose();
+        _subscription.Dispose();
+    }
+}

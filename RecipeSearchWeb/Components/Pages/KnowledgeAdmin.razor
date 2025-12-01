@@ -1,0 +1,1740 @@
+@page "/knowledge/admin"
+@rendermode InteractiveServer
+@using RecipeSearchWeb.Models
+@using RecipeSearchWeb.Services
+@using Microsoft.AspNetCore.Components.Forms
+@inject KnowledgeSearchService KnowledgeService
+@inject KnowledgeImageService ImageService
+@inject WordDocumentService WordService
+@inject PdfDocumentService PdfService
+@inject NavigationManager Navigation
+@inject UserStateService UserState
+@inject PersistentComponentState ApplicationState
+@inject AzureAuthService AuthService
+@implements IDisposable
+
+<PageTitle>KB Administration - Operations One</PageTitle>
+
+<CascadingValue Value="this">
+    @if (currentUser == null || !currentUser.IsAdmin)
+    {
+        <div class="access-denied">
+            <div class="denied-icon">🔒</div>
+            <h2>Access Denied</h2>
+            <p>You need administrator privileges to access this page.</p>
+            <button class="btn-primary" @onclick="GoBack">← Back to Knowledge Base</button>
+        </div>
+    }
+    else
+    {
+        <div class="admin-container">
+            <div class="admin-header">
+                <div class="header-left">
+                    <button class="btn-back" @onclick="GoBack">← Back</button>
+                    <h1>📚 Knowledge Base Administration</h1>
+                </div>
+                <div class="header-actions">
+                    <button class="btn-primary" @onclick="ShowUploadWordModal">
+                        📄 Upload Document
+                    </button>
+                    <button class="btn-secondary" @onclick="ShowCreateModal">
+                        ➕ Create New Article
+                    </button>
+                </div>
+            </div>
+
+            @if (!string.IsNullOrEmpty(statusMessage))
+            {
+                <div class="status-message @(isError ? "error" : "success")">
+                    @statusMessage
+                    <button class="close-status" @onclick="ClearStatus">✕</button>
+                </div>
+            }
+
+            <div class="admin-filters">
+                <div class="search-filter">
+                    <span class="filter-icon">🔍</span>
+                    <input type="text" @bind="searchFilter" @bind:event="oninput" @onkeyup="ApplyFilters"
+                           placeholder="Search by KB number, title, or tags..." />
+                    @if (!string.IsNullOrEmpty(searchFilter))
+                    {
+                        <button class="clear-filter" @onclick="ClearSearch">✕</button>
+                    }
+                </div>
+                <div class="category-filter">
+                    <select @bind="selectedGroupFilter" @bind:after="ApplyFilters">
+                        <option value="">All Categories</option>
+                        @foreach (var group in availableGroups)
+                        {
+                            <option value="@group">@group</option>
+                        }
+                    </select>
+                </div>
+                <div class="status-filter">
+                    <select @bind="selectedStatusFilter" @bind:after="ApplyFilters">
+                        <option value="">All Status</option>
+                        <option value="active">Active Only</option>
+                        <option value="inactive">Inactive Only</option>
+                    </select>
+                </div>
+                <div class="filter-stats">
+                    Showing @filteredArticles.Count of @allArticles.Count articles
+                </div>
+            </div>
+
+            <div class="articles-table-container">
+                <table class="articles-table">
+                    <thead>
+                        <tr>
+                            <th>KB Number</th>
+                            <th>Title</th>
+                            <th>Group</th>
+                            <th>Owner</th>
+                            <th>Last Updated</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (!filteredArticles.Any())
+                        {
+                            <tr>
+                                <td colspan="7" class="no-results">No articles found matching your filters</td>
+                            </tr>
+                        }
+                        @foreach (var article in filteredArticles)
+                        {
+                            <tr class="@(!article.IsActive ? "inactive-row" : "")">
+                                <td class="kb-number">@article.KBNumber</td>
+                                <td class="title">@article.Title</td>
+                                <td>@article.KBGroup</td>
+                                <td>@article.KBOwner</td>
+                                <td>@article.LastUpdated.ToString("MMM dd, yyyy")</td>
+                                <td>
+                                    <span class="status-badge @(article.IsActive ? "active" : "inactive")">
+                                        @(article.IsActive ? "Active" : "Inactive")
+                                    </span>
+                                </td>
+                                <td class="actions">
+                                    <button class="btn-icon" title="Edit" @onclick="() => EditArticle(article)">✏️</button>
+                                    <button class="btn-icon" title="Manage Images" @onclick="() => ManageImages(article)">🖼️</button>
+                                    <button class="btn-icon" title="@(article.IsActive ? "Deactivate" : "Activate")" 
+                                            @onclick="() => ToggleArticleStatus(article)">
+                                        @(article.IsActive ? "🚫" : "✅")
+                                    </button>
+                                    <button class="btn-icon btn-danger" title="Delete Permanently" @onclick="() => ConfirmDeleteArticle(article)">🗑️</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        @* Upload Word Document Modal *@
+        @if (showUploadModal)
+        {
+            <div class="modal-overlay" @onclick="CloseModals">
+                <div class="modal-content upload-modal" @onclick:stopPropagation="true">
+                    <button class="modal-close" @onclick="CloseModals">✕</button>
+                    <h2>📄 Upload Document</h2>
+                    <p class="modal-description">
+                        Upload a Word document (.docx) or PDF file (.pdf) and it will be automatically converted to a KB article.
+                        The system will extract metadata, content, and embedded images.
+                    </p>
+
+                    <div class="upload-area @(isDragging ? "dragging" : "")">
+                        <InputFile OnChange="HandleFileUpload" accept=".docx,.pdf" />
+                        <div class="upload-placeholder">
+                            <span class="upload-icon">📁</span>
+                            <p>Drag and drop a document here or click to browse</p>
+                            <span class="file-types">Supported: .docx and .pdf files up to 10MB</span>
+                        </div>
+                    </div>
+
+                    @if (isProcessing)
+                    {
+                        <div class="processing-indicator">
+                            <div class="spinner"></div>
+                            <p>Processing document...</p>
+                        </div>
+                    }
+
+                    @if (uploadedArticle != null)
+                    {
+                        <div class="preview-section">
+                            <h3>📋 Preview</h3>
+                            <div class="preview-field">
+                                <label>KB Number:</label>
+                                <input @bind="uploadedArticle.KBNumber" />
+                            </div>
+                            <div class="preview-field">
+                                <label>Title:</label>
+                                <input @bind="uploadedArticle.Title" />
+                            </div>
+                            <div class="preview-field">
+                                <label>Group:</label>
+                                <select @bind="uploadedArticle.KBGroup">
+                                    @foreach (var group in KBGroups.All)
+                                    {
+                                        <option value="@group">@group</option>
+                                    }
+                                    <option value="Email & Internet">Email & Internet</option>
+                                </select>
+                            </div>
+                            <div class="preview-field">
+                                <label>Short Description:</label>
+                                <input @bind="uploadedArticle.ShortDescription" />
+                            </div>
+                            <div class="preview-field">
+                                <label>Owner:</label>
+                                <input @bind="uploadedArticle.KBOwner" />
+                            </div>
+                            <div class="preview-field">
+                                <label>Tags (comma separated):</label>
+                                <input @bind="tagsInput" />
+                            </div>
+                            @if (extractedImages.Any())
+                            {
+                                <div class="extracted-images">
+                                    <label>Extracted Images: @extractedImages.Count</label>
+                                    <div class="image-thumbnails">
+                                        @foreach (var img in extractedImages.Take(5))
+                                        {
+                                            <div class="thumbnail">
+                                                <span>📷 @img.FileName</span>
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                            <div class="modal-actions">
+                                <button class="btn-secondary" @onclick="CloseModals">Cancel</button>
+                                <button class="btn-primary" @onclick="SaveUploadedArticle" disabled="@isSaving">
+                                    @(isSaving ? "Saving..." : "Save Article")
+                                </button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+
+        @* Create/Edit Article Modal *@
+        @if (showEditModal && editingArticle != null)
+        {
+            <div class="modal-overlay" @onclick="CloseModals">
+                <div class="modal-content edit-modal" @onclick:stopPropagation="true">
+                    <button class="modal-close" @onclick="CloseModals">✕</button>
+                    <h2>@(isNewArticle ? "➕ Create New Article" : "✏️ Edit Article")</h2>
+
+                    <div class="edit-form">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>KB Number *</label>
+                                <input @bind="editingArticle.KBNumber" readonly="@(!isNewArticle)" />
+                            </div>
+                            <div class="form-group">
+                                <label>Group *</label>
+                                <select @bind="editingArticle.KBGroup">
+                                    @foreach (var group in KBGroups.All)
+                                    {
+                                        <option value="@group">@group</option>
+                                    }
+                                    <option value="Email & Internet">Email & Internet</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Title *</label>
+                            <input @bind="editingArticle.Title" />
+                        </div>
+
+                        <div class="form-group">
+                            <label>Short Description</label>
+                            <input @bind="editingArticle.ShortDescription" placeholder="Brief summary of the article" />
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Owner</label>
+                                <input @bind="editingArticle.KBOwner" />
+                            </div>
+                            <div class="form-group">
+                                <label>Target Readers</label>
+                                <select @bind="editingArticle.TargetReaders">
+                                    <option value="Users">Users</option>
+                                    <option value="Technicians">Technicians</option>
+                                    <option value="Administrators">Administrators</option>
+                                    <option value="All">All</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Purpose</label>
+                            <textarea @bind="editingArticle.Purpose" rows="3" placeholder="What is the purpose of this article?"></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Context</label>
+                            <textarea @bind="editingArticle.Context" rows="3" placeholder="When/where does this apply?"></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Applies To</label>
+                            <input @bind="editingArticle.AppliesTo" placeholder="Who is this article for?" />
+                        </div>
+
+                        <div class="form-group">
+                            <label>Content (Markdown) *</label>
+                            <textarea @bind="editingArticle.Content" rows="15" class="content-editor" 
+                                      placeholder="## Section Title&#10;&#10;Content here...&#10;&#10;- List item 1&#10;- List item 2"></textarea>
+                            <div class="editor-help">
+                                Supports Markdown: ## Headings, **bold**, `code`, - lists
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Tags (comma separated)</label>
+                            <input @bind="editTagsInput" placeholder="tag1, tag2, tag3" />
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Language</label>
+                                <select @bind="editingArticle.Language">
+                                    <option value="English">English</option>
+                                    <option value="Spanish">Spanish</option>
+                                </select>
+                            </div>
+                            <div class="form-group checkbox-group">
+                                <label>
+                                    <input type="checkbox" @bind="editingArticle.IsActive" />
+                                    Active
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="modal-actions">
+                            <button class="btn-secondary" @onclick="CloseModals">Cancel</button>
+                            <button class="btn-primary" @onclick="SaveArticle" disabled="@isSaving">
+                                @(isSaving ? "Saving..." : "Save Article")
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+
+        @* Image Management Modal *@
+        @if (showImageModal && imageArticle != null)
+        {
+            <div class="modal-overlay" @onclick="CloseModals">
+                <div class="modal-content image-modal" @onclick:stopPropagation="true">
+                    <button class="modal-close" @onclick="CloseModals">✕</button>
+                    <h2>🖼️ Manage Images - @imageArticle.Title</h2>
+
+                    <div class="image-upload-section">
+                        <h3>Upload New Image</h3>
+                        <InputFile OnChange="HandleImageUpload" accept="image/*" />
+                        
+                        @if (imageUploadProgress > 0 && imageUploadProgress < 100)
+                        {
+                            <div class="upload-progress">
+                                <div class="progress-bar" style="width: @imageUploadProgress%"></div>
+                            </div>
+                        }
+                    </div>
+
+                    <div class="images-grid">
+                        @if (!imageArticle.Images.Any())
+                        {
+                            <p class="no-images">No images attached to this article yet.</p>
+                        }
+                        else
+                        {
+                            @foreach (var image in imageArticle.Images)
+                            {
+                                <div class="image-card">
+                                    <img src="@image.BlobUrl" alt="@image.AltText" loading="lazy" />
+                                    <div class="image-info">
+                                        <input @bind="image.AltText" placeholder="Alt text" class="alt-input" />
+                                        <span class="image-size">@FormatFileSize(image.SizeBytes)</span>
+                                    </div>
+                                    <div class="image-actions">
+                                        <button class="btn-icon" title="Copy Markdown" @onclick="() => CopyImageMarkdown(image)">📋</button>
+                                        <button class="btn-icon danger" title="Delete" @onclick="() => DeleteImage(image)">🗑️</button>
+                                    </div>
+                                </div>
+                            }
+                        }
+                    </div>
+
+                    <div class="modal-actions">
+                        <button class="btn-primary" @onclick="SaveImageChanges">Save Changes</button>
+                    </div>
+                </div>
+            </div>
+        }
+
+        @* Delete Confirmation Modal *@
+        @if (showDeleteConfirmModal && articleToDelete != null)
+        {
+            <div class="modal-overlay" @onclick="CancelDelete">
+                <div class="modal-content delete-confirm-modal" @onclick:stopPropagation="true">
+                    <div class="delete-warning-icon">⚠️</div>
+                    <h2>Delete Article Permanently?</h2>
+                    <p class="delete-warning">
+                        You are about to permanently delete:
+                    </p>
+                    <div class="delete-article-info">
+                        <strong>@articleToDelete.KBNumber</strong> - @articleToDelete.Title
+                    </div>
+                    <p class="delete-details">
+                        This will also delete all @articleToDelete.Images.Count associated image(s).<br/>
+                        <strong>This action cannot be undone!</strong>
+                    </p>
+                    <div class="delete-modal-actions">
+                        <button class="btn-cancel" @onclick="CancelDelete">Cancel</button>
+                        <button class="btn-delete" @onclick="DeleteArticlePermanently">🗑️ Delete Permanently</button>
+                    </div>
+                </div>
+            </div>
+        }
+    }
+</CascadingValue>
+
+<style>
+.admin-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+.admin-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 2rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid #333;
+}
+
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.header-left h1 {
+    font-size: 1.5rem;
+    font-weight: 300;
+    letter-spacing: 2px;
+    color: #00d4ff;
+    margin: 0;
+}
+
+.btn-back {
+    background: transparent;
+    border: 1px solid #444;
+    color: #888;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-back:hover {
+    border-color: #00d4ff;
+    color: #00d4ff;
+}
+
+.header-actions {
+    display: flex;
+    gap: 1rem;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
+    border: none;
+    color: #000;
+    padding: 0.75rem 1.5rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-primary:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(0, 212, 255, 0.4);
+}
+
+.btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-secondary {
+    background: transparent;
+    border: 1px solid #00d4ff;
+    color: #00d4ff;
+    padding: 0.75rem 1.5rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-secondary:hover {
+    background: rgba(0, 212, 255, 0.1);
+}
+
+.status-message {
+    padding: 1rem;
+    margin-bottom: 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.status-message.success {
+    background: rgba(0, 255, 136, 0.1);
+    border: 1px solid #00ff88;
+    color: #00ff88;
+}
+
+.status-message.error {
+    background: rgba(255, 68, 68, 0.1);
+    border: 1px solid #ff4444;
+    color: #ff4444;
+}
+
+.close-status {
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: 1.2rem;
+}
+
+/* Admin Filters */
+.admin-filters {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.search-filter {
+    flex: 1;
+    min-width: 250px;
+    display: flex;
+    align-items: center;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    padding: 0 1rem;
+}
+
+.search-filter:focus-within {
+    border-color: #00d4ff;
+}
+
+.filter-icon {
+    margin-right: 0.5rem;
+}
+
+.search-filter input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: #fff;
+    padding: 0.75rem 0;
+    outline: none;
+}
+
+.search-filter input::placeholder {
+    color: #666;
+}
+
+.clear-filter {
+    background: none;
+    border: none;
+    color: #666;
+    cursor: pointer;
+    padding: 0.25rem;
+}
+
+.clear-filter:hover {
+    color: #fff;
+}
+
+.category-filter select,
+.status-filter select {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    color: #fff;
+    padding: 0.75rem 1rem;
+    min-width: 150px;
+    cursor: pointer;
+}
+
+.category-filter select:focus,
+.status-filter select:focus {
+    border-color: #00d4ff;
+    outline: none;
+}
+
+.filter-stats {
+    color: #888;
+    font-size: 0.85rem;
+    padding: 0.5rem 1rem;
+    background: rgba(0, 212, 255, 0.1);
+    border: 1px solid rgba(0, 212, 255, 0.2);
+}
+
+/* Articles Table */
+.articles-table-container {
+    overflow-x: auto;
+}
+
+.articles-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #1a1a1a;
+}
+
+.articles-table th,
+.articles-table td {
+    padding: 1rem;
+    text-align: left;
+    border-bottom: 1px solid #333;
+}
+
+.articles-table th {
+    background: #0d0d0d;
+    color: #00d4ff;
+    font-weight: 500;
+    text-transform: uppercase;
+    font-size: 0.8rem;
+    letter-spacing: 1px;
+}
+
+.articles-table tr:hover {
+    background: rgba(0, 212, 255, 0.05);
+}
+
+.articles-table tr.inactive-row {
+    opacity: 0.6;
+    background: rgba(255, 68, 68, 0.05);
+}
+
+.articles-table tr.inactive-row:hover {
+    background: rgba(255, 68, 68, 0.1);
+}
+
+.articles-table .no-results {
+    text-align: center;
+    color: #666;
+    padding: 2rem !important;
+    font-style: italic;
+}
+
+.articles-table .kb-number {
+    font-family: monospace;
+    color: #00d4ff;
+}
+
+.articles-table .title {
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.status-badge {
+    padding: 0.25rem 0.75rem;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+}
+
+.status-badge.active {
+    background: rgba(0, 255, 136, 0.2);
+    color: #00ff88;
+}
+
+.status-badge.inactive {
+    background: rgba(255, 68, 68, 0.2);
+    color: #ff4444;
+}
+
+.actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.btn-icon {
+    background: transparent;
+    border: 1px solid #333;
+    padding: 0.5rem;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: all 0.2s;
+}
+
+.btn-icon:hover {
+    border-color: #00d4ff;
+    background: rgba(0, 212, 255, 0.1);
+}
+
+.btn-icon.btn-danger {
+    border-color: #ff4444;
+    color: #ff4444;
+}
+
+.btn-icon.btn-danger:hover {
+    background: rgba(255, 68, 68, 0.2);
+    border-color: #ff6666;
+}
+
+/* Modal Styles */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 2rem;
+}
+
+.modal-content {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    max-width: 800px;
+    width: 100%;
+    max-height: 90vh;
+    overflow-y: auto;
+    padding: 2rem;
+    position: relative;
+}
+
+.modal-content h2 {
+    color: #00d4ff;
+    font-weight: 300;
+    margin-bottom: 1rem;
+}
+
+.modal-close {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    background: none;
+    border: none;
+    color: #666;
+    font-size: 1.5rem;
+    cursor: pointer;
+}
+
+.modal-close:hover {
+    color: #fff;
+}
+
+.modal-description {
+    color: #888;
+    margin-bottom: 1.5rem;
+}
+
+/* Upload Area */
+.upload-area {
+    border: 2px dashed #333;
+    padding: 3rem;
+    text-align: center;
+    position: relative;
+    transition: all 0.3s;
+}
+
+.upload-area.dragging {
+    border-color: #00d4ff;
+    background: rgba(0, 212, 255, 0.05);
+}
+
+.upload-area input[type="file"] {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.upload-placeholder {
+    pointer-events: none;
+}
+
+.upload-icon {
+    font-size: 3rem;
+    display: block;
+    margin-bottom: 1rem;
+}
+
+.file-types {
+    color: #666;
+    font-size: 0.85rem;
+}
+
+.processing-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 2rem;
+}
+
+.spinner {
+    width: 24px;
+    height: 24px;
+    border: 2px solid #333;
+    border-top-color: #00d4ff;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Preview Section */
+.preview-section {
+    margin-top: 2rem;
+    padding-top: 2rem;
+    border-top: 1px solid #333;
+}
+
+.preview-section h3 {
+    color: #00d4ff;
+    margin-bottom: 1rem;
+}
+
+.preview-field {
+    margin-bottom: 1rem;
+}
+
+.preview-field label {
+    display: block;
+    color: #888;
+    font-size: 0.85rem;
+    margin-bottom: 0.25rem;
+}
+
+.preview-field input,
+.preview-field select {
+    width: 100%;
+    padding: 0.75rem;
+    background: #0d0d0d;
+    border: 1px solid #333;
+    color: #fff;
+}
+
+.extracted-images {
+    margin: 1rem 0;
+}
+
+.image-thumbnails {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.5rem;
+}
+
+.thumbnail {
+    background: #0d0d0d;
+    padding: 0.5rem;
+    font-size: 0.8rem;
+    color: #888;
+}
+
+/* Edit Form */
+.edit-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.form-group label {
+    color: #888;
+    font-size: 0.85rem;
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea {
+    padding: 0.75rem;
+    background: #0d0d0d;
+    border: 1px solid #333;
+    color: #fff;
+    font-family: inherit;
+}
+
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus {
+    border-color: #00d4ff;
+    outline: none;
+}
+
+.content-editor {
+    font-family: 'Consolas', monospace;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    resize: vertical;
+}
+
+.editor-help {
+    font-size: 0.75rem;
+    color: #666;
+}
+
+.checkbox-group {
+    flex-direction: row;
+    align-items: center;
+}
+
+.checkbox-group label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 1rem;
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid #333;
+}
+
+/* Image Modal */
+.image-modal {
+    max-width: 900px;
+}
+
+.image-upload-section {
+    margin-bottom: 2rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid #333;
+}
+
+.image-upload-section h3 {
+    color: #888;
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+}
+
+.upload-progress {
+    height: 4px;
+    background: #333;
+    margin-top: 1rem;
+}
+
+.progress-bar {
+    height: 100%;
+    background: #00d4ff;
+    transition: width 0.3s;
+}
+
+.images-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1rem;
+}
+
+.no-images {
+    grid-column: 1 / -1;
+    text-align: center;
+    color: #666;
+    padding: 2rem;
+}
+
+.image-card {
+    background: #0d0d0d;
+    border: 1px solid #333;
+    overflow: hidden;
+}
+
+.image-card img {
+    width: 100%;
+    height: 150px;
+    object-fit: cover;
+}
+
+.image-info {
+    padding: 0.75rem;
+}
+
+.alt-input {
+    width: 100%;
+    padding: 0.5rem;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    color: #fff;
+    font-size: 0.85rem;
+    margin-bottom: 0.25rem;
+}
+
+.image-size {
+    font-size: 0.75rem;
+    color: #666;
+}
+
+.image-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border-top: 1px solid #333;
+}
+
+.image-actions .btn-icon.danger:hover {
+    border-color: #ff4444;
+    background: rgba(255, 68, 68, 0.1);
+}
+
+/* Delete Confirmation Modal */
+.delete-confirm-modal {
+    max-width: 500px;
+    text-align: center;
+    padding: 2rem;
+}
+
+.delete-warning-icon {
+    font-size: 4rem;
+    margin-bottom: 1rem;
+}
+
+.delete-confirm-modal h2 {
+    color: #ff4444;
+    margin-bottom: 1rem;
+}
+
+.delete-warning {
+    color: #888;
+    margin-bottom: 0.5rem;
+}
+
+.delete-article-info {
+    background: #2a2a2a;
+    padding: 1rem;
+    margin: 1rem 0;
+    border-radius: 4px;
+    color: #fff;
+}
+
+.delete-details {
+    color: #888;
+    font-size: 0.9rem;
+    margin-bottom: 1.5rem;
+}
+
+.delete-details strong {
+    color: #ff4444;
+}
+
+.delete-modal-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+}
+
+.btn-cancel {
+    background: transparent;
+    border: 1px solid #444;
+    color: #888;
+    padding: 0.75rem 1.5rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-cancel:hover {
+    border-color: #666;
+    color: #fff;
+}
+
+.btn-delete {
+    background: #ff4444;
+    border: none;
+    color: #fff;
+    padding: 0.75rem 1.5rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-weight: 500;
+}
+
+.btn-delete:hover {
+    background: #ff6666;
+}
+
+/* Access Denied */
+.access-denied {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 60vh;
+    text-align: center;
+}
+
+.denied-icon {
+    font-size: 4rem;
+    margin-bottom: 1rem;
+}
+
+.access-denied h2 {
+    color: #ff4444;
+    margin-bottom: 0.5rem;
+}
+
+.access-denied p {
+    color: #888;
+    margin-bottom: 2rem;
+}
+
+@@media (max-width: 768px) {
+    .admin-header {
+        flex-direction: column;
+        gap: 1rem;
+        align-items: flex-start;
+    }
+
+    .form-row {
+        grid-template-columns: 1fr;
+    }
+
+    .images-grid {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+
+@code {
+    [CascadingParameter(Name = "CurrentUser")]
+    private User? cascadingUser { get; set; }
+
+    private User? currentUser;
+    private PersistingComponentStateSubscription _subscription;
+    private List<KnowledgeArticle> allArticles = new();
+    private List<KnowledgeArticle> filteredArticles = new();
+    private List<string> availableGroups = new();
+    private string searchFilter = "";
+    private string selectedGroupFilter = "";
+    private string selectedStatusFilter = "";
+    private string statusMessage = "";
+    private bool isError = false;
+
+    // Upload modal state
+    private bool showUploadModal = false;
+    private bool isProcessing = false;
+    private bool isDragging = false;
+    private KnowledgeArticle? uploadedArticle;
+    private List<ExtractedImage> extractedImages = new();
+    private string tagsInput = "";
+
+    // Edit modal state
+    private bool showEditModal = false;
+    private KnowledgeArticle? editingArticle;
+    private bool isNewArticle = false;
+    private string editTagsInput = "";
+    private bool isSaving = false;
+
+    // Image modal state
+    private bool showImageModal = false;
+    private KnowledgeArticle? imageArticle;
+    private int imageUploadProgress = 0;
+
+    // Delete confirmation state
+    private bool showDeleteConfirmModal = false;
+    private KnowledgeArticle? articleToDelete;
+
+    protected override void OnInitialized()
+    {
+        // Register to persist state for prerendering
+        _subscription = ApplicationState.RegisterOnPersisting(PersistState);
+
+        // Strategy 1: Try to restore from PersistentComponentState
+        if (ApplicationState.TryTakeFromJson<User>("KBAdmin_CurrentUser", out var persistedUser) && persistedUser != null)
+        {
+            currentUser = persistedUser;
+            UserState.SetUser(currentUser);
+            return;
+        }
+
+        // Strategy 2: Try to get from AuthService directly (works during prerender)
+        var authUser = AuthService.GetCurrentUser();
+        if (authUser != null)
+        {
+            currentUser = authUser;
+            UserState.SetUser(currentUser);
+            return;
+        }
+
+        // Strategy 3: Try UserStateService
+        if (UserState.CurrentUser != null)
+        {
+            currentUser = UserState.CurrentUser;
+            return;
+        }
+
+        // Strategy 4: Use CascadingParameter as last resort
+        currentUser = cascadingUser;
+    }
+
+    private Task PersistState()
+    {
+        if (currentUser != null)
+        {
+            ApplicationState.PersistAsJson("KBAdmin_CurrentUser", currentUser);
+        }
+        return Task.CompletedTask;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadArticles();
+    }
+
+    private async Task LoadArticles()
+    {
+        // Get ALL articles including inactive for admin panel
+        allArticles = KnowledgeService.GetAllArticlesIncludingInactive();
+        
+        // Get unique groups for filter dropdown
+        availableGroups = allArticles
+            .Select(a => a.KBGroup)
+            .Where(g => !string.IsNullOrEmpty(g))
+            .Distinct()
+            .OrderBy(g => g)
+            .ToList();
+        
+        ApplyFilters();
+    }
+
+    private void ApplyFilters()
+    {
+        filteredArticles = allArticles;
+
+        // Filter by search text
+        if (!string.IsNullOrWhiteSpace(searchFilter))
+        {
+            var search = searchFilter.ToLowerInvariant();
+            filteredArticles = filteredArticles.Where(a =>
+                a.KBNumber.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                a.Title.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                a.ShortDescription.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                a.Tags.Any(t => t.Contains(search, StringComparison.OrdinalIgnoreCase))
+            ).ToList();
+        }
+
+        // Filter by category/group
+        if (!string.IsNullOrEmpty(selectedGroupFilter))
+        {
+            filteredArticles = filteredArticles
+                .Where(a => a.KBGroup.Equals(selectedGroupFilter, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        // Filter by status
+        if (!string.IsNullOrEmpty(selectedStatusFilter))
+        {
+            filteredArticles = selectedStatusFilter switch
+            {
+                "active" => filteredArticles.Where(a => a.IsActive).ToList(),
+                "inactive" => filteredArticles.Where(a => !a.IsActive).ToList(),
+                _ => filteredArticles
+            };
+        }
+
+        // Order by last updated
+        filteredArticles = filteredArticles.OrderByDescending(a => a.LastUpdated).ToList();
+    }
+
+    private void ClearSearch()
+    {
+        searchFilter = "";
+        ApplyFilters();
+    }
+
+    private void GoBack()
+    {
+        Navigation.NavigateTo("/knowledge");
+    }
+
+    private void ClearStatus()
+    {
+        statusMessage = "";
+        isError = false;
+    }
+
+    private void ShowUploadWordModal()
+    {
+        showUploadModal = true;
+        uploadedArticle = null;
+        extractedImages.Clear();
+        tagsInput = "";
+    }
+
+    private void ShowCreateModal()
+    {
+        isNewArticle = true;
+        editingArticle = new KnowledgeArticle
+        {
+            Id = KnowledgeService.GetNextAvailableId(),
+            KBNumber = KnowledgeService.GenerateNextKBNumber(),
+            KBGroup = KBGroups.MyWorkPlace,
+            TargetReaders = "Users",
+            Language = "English",
+            IsActive = true,
+            Author = currentUser?.FullName ?? "Admin"
+        };
+        editTagsInput = "";
+        showEditModal = true;
+    }
+
+    private void EditArticle(KnowledgeArticle article)
+    {
+        isNewArticle = false;
+        editingArticle = new KnowledgeArticle
+        {
+            Id = article.Id,
+            KBNumber = article.KBNumber,
+            Title = article.Title,
+            ShortDescription = article.ShortDescription,
+            Purpose = article.Purpose,
+            Context = article.Context,
+            AppliesTo = article.AppliesTo,
+            Content = article.Content,
+            KBGroup = article.KBGroup,
+            KBOwner = article.KBOwner,
+            TargetReaders = article.TargetReaders,
+            Language = article.Language,
+            Tags = new List<string>(article.Tags),
+            IsActive = article.IsActive,
+            CreatedDate = article.CreatedDate,
+            LastUpdated = article.LastUpdated,
+            Author = article.Author,
+            Images = new List<KBImage>(article.Images),
+            SourceDocument = article.SourceDocument
+        };
+        editTagsInput = string.Join(", ", article.Tags);
+        showEditModal = true;
+    }
+
+    private void ManageImages(KnowledgeArticle article)
+    {
+        imageArticle = article;
+        showImageModal = true;
+    }
+
+    private void CloseModals()
+    {
+        showUploadModal = false;
+        showEditModal = false;
+        showImageModal = false;
+        uploadedArticle = null;
+        editingArticle = null;
+        imageArticle = null;
+        extractedImages.Clear();
+    }
+
+    private async Task HandleFileUpload(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file == null) return;
+
+        var isDocx = file.Name.EndsWith(".docx", StringComparison.OrdinalIgnoreCase);
+        var isPdf = file.Name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase);
+
+        if (!isDocx && !isPdf)
+        {
+            statusMessage = "Please upload a Word document (.docx) or PDF file (.pdf)";
+            isError = true;
+            return;
+        }
+
+        if (file.Size > 10 * 1024 * 1024) // 10MB limit
+        {
+            statusMessage = "File size must be less than 10MB";
+            isError = true;
+            return;
+        }
+
+        isProcessing = true;
+        StateHasChanged();
+
+        try
+        {
+            using var stream = file.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+
+            if (isDocx)
+            {
+                // Process Word document
+                var result = await WordService.ProcessDocumentAsync(stream, file.Name);
+
+                if (result.Success && result.Article != null)
+                {
+                    result.Article.Id = KnowledgeService.GetNextAvailableId();
+                    uploadedArticle = result.Article;
+                    extractedImages = result.ExtractedImages;
+                    tagsInput = string.Join(", ", result.Article.Tags);
+                    
+                    statusMessage = $"Word document processed successfully. Found {extractedImages.Count} images.";
+                    isError = false;
+                }
+                else
+                {
+                    statusMessage = result.ErrorMessage ?? "Failed to process Word document";
+                    isError = true;
+                }
+            }
+            else if (isPdf)
+            {
+                // Process PDF document
+                var result = await PdfService.ProcessDocumentAsync(stream, file.Name);
+
+                if (result.Success && result.Article != null)
+                {
+                    result.Article.Id = KnowledgeService.GetNextAvailableId();
+                    uploadedArticle = result.Article;
+                    extractedImages = new List<ExtractedImage>(); // PDFs don't extract images directly
+                    tagsInput = string.Join(", ", result.Article.Tags);
+                    
+                    statusMessage = $"PDF processed successfully. Pages: {result.PageCount}, Images detected: {result.ImageCount}";
+                    isError = false;
+                }
+                else
+                {
+                    statusMessage = result.ErrorMessage ?? "Failed to process PDF";
+                    isError = true;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Error: {ex.Message}";
+            isError = true;
+        }
+        finally
+        {
+            isProcessing = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SaveUploadedArticle()
+    {
+        if (uploadedArticle == null) return;
+
+        isSaving = true;
+        StateHasChanged();
+
+        try
+        {
+            // Parse tags
+            uploadedArticle.Tags = tagsInput
+                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(t => t.Trim())
+                .Where(t => !string.IsNullOrEmpty(t))
+                .ToList();
+
+            uploadedArticle.Author = currentUser?.FullName ?? "Admin";
+            uploadedArticle.CreatedDate = DateTime.UtcNow;
+            uploadedArticle.LastUpdated = DateTime.UtcNow;
+
+            // Upload extracted images
+            foreach (var img in extractedImages)
+            {
+                var kbImage = await ImageService.UploadImageAsync(
+                    uploadedArticle.KBNumber,
+                    img.Data,
+                    img.FileName,
+                    img.ContentType);
+
+                if (kbImage != null)
+                {
+                    uploadedArticle.Images.Add(kbImage);
+                }
+            }
+
+            // Save article
+            await KnowledgeService.AddArticleAsync(uploadedArticle);
+            await KnowledgeService.ReloadArticlesAsync();
+            await LoadArticles();
+
+            statusMessage = $"Article {uploadedArticle.KBNumber} created successfully!";
+            isError = false;
+            CloseModals();
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Error saving article: {ex.Message}";
+            isError = true;
+        }
+        finally
+        {
+            isSaving = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SaveArticle()
+    {
+        if (editingArticle == null) return;
+
+        if (string.IsNullOrWhiteSpace(editingArticle.Title) || string.IsNullOrWhiteSpace(editingArticle.KBNumber))
+        {
+            statusMessage = "Title and KB Number are required";
+            isError = true;
+            return;
+        }
+
+        isSaving = true;
+        StateHasChanged();
+
+        try
+        {
+            // Parse tags
+            editingArticle.Tags = editTagsInput
+                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(t => t.Trim())
+                .Where(t => !string.IsNullOrEmpty(t))
+                .ToList();
+
+            editingArticle.LastUpdated = DateTime.UtcNow;
+
+            if (isNewArticle)
+            {
+                editingArticle.CreatedDate = DateTime.UtcNow;
+                editingArticle.Author = currentUser?.FullName ?? "Admin";
+                await KnowledgeService.AddArticleAsync(editingArticle);
+                statusMessage = $"Article {editingArticle.KBNumber} created successfully!";
+            }
+            else
+            {
+                await KnowledgeService.UpdateArticleAsync(editingArticle);
+                statusMessage = $"Article {editingArticle.KBNumber} updated successfully!";
+            }
+
+            isError = false;
+            await KnowledgeService.ReloadArticlesAsync();
+            await LoadArticles();
+            CloseModals();
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Error saving article: {ex.Message}";
+            isError = true;
+        }
+        finally
+        {
+            isSaving = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ToggleArticleStatus(KnowledgeArticle article)
+    {
+        try
+        {
+            article.IsActive = !article.IsActive;
+            article.LastUpdated = DateTime.UtcNow;
+            await KnowledgeService.UpdateArticleAsync(article);
+            
+            statusMessage = $"Article {article.KBNumber} {(article.IsActive ? "activated" : "deactivated")}";
+            isError = false;
+            await LoadArticles();
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Error: {ex.Message}";
+            isError = true;
+        }
+    }
+
+    private async Task HandleImageUpload(InputFileChangeEventArgs e)
+    {
+        if (imageArticle == null) return;
+
+        var file = e.File;
+        if (file == null) return;
+
+        imageUploadProgress = 10;
+        StateHasChanged();
+
+        try
+        {
+            using var stream = file.OpenReadStream(maxAllowedSize: 5 * 1024 * 1024);
+            
+            imageUploadProgress = 50;
+            StateHasChanged();
+
+            var kbImage = await ImageService.UploadImageAsync(
+                imageArticle.KBNumber,
+                stream,
+                file.Name,
+                file.ContentType,
+                Path.GetFileNameWithoutExtension(file.Name));
+
+            if (kbImage != null)
+            {
+                imageArticle.Images.Add(kbImage);
+                await KnowledgeService.UpdateArticleAsync(imageArticle);
+                
+                statusMessage = "Image uploaded successfully";
+                isError = false;
+            }
+            else
+            {
+                statusMessage = "Failed to upload image";
+                isError = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Error: {ex.Message}";
+            isError = true;
+        }
+        finally
+        {
+            imageUploadProgress = 0;
+            StateHasChanged();
+        }
+    }
+
+    private async Task DeleteImage(KBImage image)
+    {
+        if (imageArticle == null) return;
+
+        try
+        {
+            await ImageService.DeleteImageAsync(image.BlobUrl);
+            imageArticle.Images.Remove(image);
+            await KnowledgeService.UpdateArticleAsync(imageArticle);
+            
+            statusMessage = "Image deleted";
+            isError = false;
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Error: {ex.Message}";
+            isError = true;
+        }
+    }
+
+    private void CopyImageMarkdown(KBImage image)
+    {
+        // This would require JS interop for clipboard
+        var markdown = KnowledgeImageService.GenerateMarkdownImage(image);
+        statusMessage = $"Markdown copied: {markdown}";
+        isError = false;
+    }
+
+    private async Task SaveImageChanges()
+    {
+        if (imageArticle == null) return;
+
+        try
+        {
+            await KnowledgeService.UpdateArticleAsync(imageArticle);
+            statusMessage = "Image changes saved";
+            isError = false;
+            await LoadArticles();
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Error: {ex.Message}";
+            isError = true;
+        }
+    }
+
+    private string FormatFileSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        return $"{bytes / (1024.0 * 1024.0):F1} MB";
+    }
+
+    private void ConfirmDeleteArticle(KnowledgeArticle article)
+    {
+        articleToDelete = article;
+        showDeleteConfirmModal = true;
+    }
+
+    private void CancelDelete()
+    {
+        articleToDelete = null;
+        showDeleteConfirmModal = false;
+    }
+
+    private async Task DeleteArticlePermanently()
+    {
+        if (articleToDelete == null) return;
+
+        try
+        {
+            // Delete all images associated with the article
+            foreach (var image in articleToDelete.Images.ToList())
+            {
+                try
+                {
+                    await ImageService.DeleteImageAsync(image.BlobUrl);
+                }
+                catch (Exception ex)
+                {
+                    // Log but continue with deletion
+                    Console.WriteLine($"Warning: Could not delete image {image.FileName}: {ex.Message}");
+                }
+            }
+
+            // Delete the article
+            await KnowledgeService.DeleteArticleAsync(articleToDelete.KBNumber);
+            
+            statusMessage = $"Article {articleToDelete.KBNumber} has been permanently deleted";
+            isError = false;
+            
+            await LoadArticles();
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Error deleting article: {ex.Message}";
+            isError = true;
+        }
+        finally
+        {
+            articleToDelete = null;
+            showDeleteConfirmModal = false;
+            StateHasChanged();
+        }
+    }
+
+    public void Dispose()
+    {
+        _subscription.Dispose();
+    }
+}

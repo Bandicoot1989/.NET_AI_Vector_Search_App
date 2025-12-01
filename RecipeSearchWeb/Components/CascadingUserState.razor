@@ -1,0 +1,56 @@
+@using RecipeSearchWeb.Models
+@using RecipeSearchWeb.Services
+@implements IDisposable
+
+<CascadingValue Value="currentUser" Name="CurrentUser">
+    @ChildContent
+</CascadingValue>
+
+@code {
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    [Inject]
+    private AzureAuthService AuthService { get; set; } = default!;
+
+    [Inject]
+    private UserStateService UserState { get; set; } = default!;
+
+    [Inject]
+    private PersistentComponentState ApplicationState { get; set; } = default!;
+
+    private User? currentUser;
+    private PersistingComponentStateSubscription _subscription;
+
+    protected override void OnInitialized()
+    {
+        // Register to persist user state when switching to interactive mode
+        _subscription = ApplicationState.RegisterOnPersisting(PersistUserState);
+
+        // Try to restore user from persisted state first (for interactive mode)
+        if (ApplicationState.TryTakeFromJson<User>("CurrentUser", out var restoredUser))
+        {
+            currentUser = restoredUser;
+        }
+        else
+        {
+            // During static render, get user from HttpContext
+            currentUser = AuthService.GetCurrentUser();
+        }
+        
+        // Store in UserStateService for any component that needs it
+        UserState.SetUser(currentUser);
+    }
+
+    private Task PersistUserState()
+    {
+        // Persist user state so it can be restored in interactive mode
+        ApplicationState.PersistAsJson("CurrentUser", currentUser);
+        return Task.CompletedTask;
+    }
+
+    public void Dispose()
+    {
+        _subscription.Dispose();
+    }
+}
