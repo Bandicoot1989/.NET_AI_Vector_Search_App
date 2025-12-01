@@ -27,6 +27,8 @@ builder.Services.AddSingleton(embeddingClient);
 
 // Add all Operations One Centre services with clean architecture pattern
 builder.Services.AddStorageServices();     // Azure Blob Storage services
+builder.Services.AddSharePointServices();  // SharePoint KB integration
+builder.Services.AddConfluenceServices();  // Confluence KB integration
 builder.Services.AddSearchServices();       // Vector search with embeddings
 builder.Services.AddAgentServices();        // AI RAG Agent
 builder.Services.AddAuthServices();         // Azure Easy Auth
@@ -93,6 +95,30 @@ namespace RecipeSearchWeb.Extensions
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "Failed to initialize ContextSearchService - agent context may not work correctly");
+            }
+
+            // Initialize SharePoint KB service (non-blocking)
+            try
+            {
+                var sharePointService = serviceProvider.GetRequiredService<SharePointKnowledgeService>();
+                await sharePointService.InitializeAsync();
+                logger.LogInformation("SharePointKnowledgeService initialized");
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to initialize SharePointKnowledgeService - SharePoint KB may not work correctly");
+            }
+
+            // Initialize Confluence KB service (non-blocking)
+            try
+            {
+                var confluenceService = serviceProvider.GetRequiredService<ConfluenceKnowledgeService>();
+                await confluenceService.InitializeAsync();
+                logger.LogInformation("ConfluenceKnowledgeService initialized");
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to initialize ConfluenceKnowledgeService - Confluence KB may not work correctly");
             }
         }
     }

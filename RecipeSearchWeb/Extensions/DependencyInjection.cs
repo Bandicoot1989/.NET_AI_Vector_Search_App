@@ -56,6 +56,28 @@ public static class DependencyInjection
     }
 
     /// <summary>
+    /// Add SharePoint integration services
+    /// </summary>
+    public static IServiceCollection AddSharePointServices(this IServiceCollection services)
+    {
+        services.AddSingleton<SharePointKnowledgeService>();
+        services.AddSingleton<ISharePointService>(sp => sp.GetRequiredService<SharePointKnowledgeService>());
+
+        return services;
+    }
+
+    /// <summary>
+    /// Add Confluence integration services
+    /// </summary>
+    public static IServiceCollection AddConfluenceServices(this IServiceCollection services)
+    {
+        services.AddSingleton<ConfluenceKnowledgeService>();
+        services.AddSingleton<IConfluenceService>(sp => sp.GetRequiredService<ConfluenceKnowledgeService>());
+
+        return services;
+    }
+
+    /// <summary>
     /// Add search services (vector search with embeddings)
     /// NOTE: Services are registered as both concrete types AND interfaces for backwards compatibility
     /// </summary>
@@ -117,6 +139,7 @@ public static class DependencyInjection
     {
         services.AddInfrastructureServices(configuration);
         services.AddStorageServices();
+        services.AddSharePointServices();  // SharePoint KB integration
         services.AddSearchServices();
         services.AddAgentServices();
         services.AddAuthServices();
@@ -152,5 +175,9 @@ public static class DependencyInjection
 
         var contextService = serviceProvider.GetRequiredService<ContextSearchService>();
         await contextService.InitializeAsync();
+
+        // Initialize SharePoint service
+        var sharePointService = serviceProvider.GetRequiredService<SharePointKnowledgeService>();
+        await sharePointService.InitializeAsync();
     }
 }
