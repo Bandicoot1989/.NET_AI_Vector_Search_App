@@ -413,23 +413,30 @@ namespace RecipeSearchWeb.Extensions
                 logger.LogWarning(ex, "Failed to initialize ContextSearchService - agent context may not work correctly");
             }
 
-            // Initialize Confluence KB service (non-blocking)
-            try
+            // Initialize Confluence KB service IN BACKGROUND (fire-and-forget to avoid startup timeout)
+            // This allows the app to start quickly while Confluence loads in the background
+            var confluenceService = serviceProvider.GetRequiredService<ConfluenceKnowledgeService>();
+            if (confluenceService.IsConfigured)
             {
-                var confluenceService = serviceProvider.GetRequiredService<ConfluenceKnowledgeService>();
-                if (confluenceService.IsConfigured)
+                _ = Task.Run(async () =>
                 {
-                    await confluenceService.InitializeAsync();
-                    logger.LogInformation("ConfluenceKnowledgeService initialized");
-                }
-                else
-                {
-                    logger.LogInformation("ConfluenceKnowledgeService not configured - skipping initialization");
-                }
+                    try
+                    {
+                        logger.LogInformation("Starting Confluence initialization in background...");
+                        await confluenceService.InitializeAsync();
+                        logger.LogInformation("ConfluenceKnowledgeService initialized in background with {Count} pages", 
+                            confluenceService.GetCachedPageCount());
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Failed to initialize ConfluenceKnowledgeService in background");
+                    }
+                });
+                logger.LogInformation("Confluence initialization started in background");
             }
-            catch (Exception ex)
+            else
             {
-                logger.LogWarning(ex, "Failed to initialize ConfluenceKnowledgeService - Confluence KB may not work correctly");
+                logger.LogInformation("ConfluenceKnowledgeService not configured - skipping initialization");
             }
         }
     }
