@@ -144,8 +144,18 @@ Te recomiendo [abrir un ticket en MyTicket](https://antolin.atlassian.net/servic
             // 1. Search the Knowledge Base for relevant articles
             var relevantArticles = await _knowledgeService.SearchArticlesAsync(question, topResults: 5);
             
-            // 2. Search context documents (tickets, URLs, etc.) with expanded query
-            var contextDocs = await _contextService.SearchAsync(expandedQuery, topResults: 8);
+            // 2. Search context documents (tickets, URLs, etc.) with BOTH original and expanded query
+            // Use more results to ensure we get both reference data AND tickets
+            var contextResults1 = await _contextService.SearchAsync(question, topResults: 10);
+            var contextResults2 = await _contextService.SearchAsync(expandedQuery, topResults: 10);
+            var contextDocs = contextResults1.Concat(contextResults2)
+                .GroupBy(d => d.Id)
+                .Select(g => g.First())
+                .Take(15)
+                .ToList();
+            
+            _logger.LogInformation("Context search: {Count1} from original, {Count2} from expanded, {Total} combined", 
+                contextResults1.Count, contextResults2.Count, contextDocs.Count);
             
             // 3. Search Confluence KB with BOTH original and expanded query for better results
             var confluencePages = new List<ConfluencePage>();
@@ -243,8 +253,14 @@ Please answer based on the context provided above. If there's a relevant ticket 
         // 1. Search the Knowledge Base for relevant articles
         var relevantArticles = await _knowledgeService.SearchArticlesAsync(question, topResults: 5);
         
-        // 2. Search context documents with expanded query
-        var contextDocs = await _contextService.SearchAsync(expandedQuery, topResults: 8);
+        // 2. Search context documents with BOTH original and expanded query
+        var contextResults1 = await _contextService.SearchAsync(question, topResults: 10);
+        var contextResults2 = await _contextService.SearchAsync(expandedQuery, topResults: 10);
+        var contextDocs = contextResults1.Concat(contextResults2)
+            .GroupBy(d => d.Id)
+            .Select(g => g.First())
+            .Take(15)
+            .ToList();
         
         // 3. Search Confluence KB with BOTH original and expanded query for better results
         var confluencePages = new List<ConfluencePage>();
@@ -322,6 +338,17 @@ Please answer based on the context provided above. If there's a relevant ticket 
         
         _logger.LogInformation("BuildContext: {JiraCount} Jira tickets, {RefCount} reference data entries", 
             jiraTickets.Count, referenceData.Count);
+        
+        // Log Jira tickets found for debugging
+        if (jiraTickets.Any())
+        {
+            _logger.LogInformation("Jira tickets found: {Tickets}", 
+                string.Join(", ", jiraTickets.Select(t => t.Name)));
+        }
+        else
+        {
+            _logger.LogWarning("No Jira tickets found in context documents");
+        }
         
         // PRIORITY 0: Add reference data (Centres, Companies, etc.) - HIGHEST PRIORITY for lookups
         if (referenceData.Any())
@@ -534,10 +561,38 @@ Please answer based on the context provided above. If there's a relevant ticket 
             expansions.Add("Email Outlook");
         }
         
-        // SAP related
+        // SAP related - expanded for user creation
         if (lowerQuery.Contains("sap"))
         {
             expansions.Add("SAP transaction user");
+            expansions.Add("SAP new user creation");
+            expansions.Add("SAP usuario nuevo");
+            // If asking about creating users
+            if (lowerQuery.Contains("usuario") || lowerQuery.Contains("user") || lowerQuery.Contains("crear") || 
+                lowerQuery.Contains("create") || lowerQuery.Contains("nuevo") || lowerQuery.Contains("new") ||
+                lowerQuery.Contains("abrir") || lowerQuery.Contains("ticket"))
+            {
+                expansions.Add("SAP User Request");
+                expansions.Add("New SAP User");
+                expansions.Add("SAP Access Request");
+            }
+        }
+        
+        // New user / create user requests (generic)
+        if ((lowerQuery.Contains("nuevo") || lowerQuery.Contains("new") || lowerQuery.Contains("crear") || lowerQuery.Contains("create")) &&
+            (lowerQuery.Contains("usuario") || lowerQuery.Contains("user")))
+        {
+            expansions.Add("new user creation request");
+            expansions.Add("user access request");
+            expansions.Add("crear usuario");
+        }
+        
+        // Ticket / request related
+        if (lowerQuery.Contains("ticket") || lowerQuery.Contains("abrir") || lowerQuery.Contains("solicitar") ||
+            lowerQuery.Contains("request") || lowerQuery.Contains("open"))
+        {
+            expansions.Add("ticket request form");
+            expansions.Add("service request");
         }
         
         // Computer / PC issues
