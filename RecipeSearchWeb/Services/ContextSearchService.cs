@@ -180,7 +180,7 @@ public class ContextSearchService : IContextService
     }
 
     /// <summary>
-    /// Search context documents
+    /// Search context documents using hybrid search (semantic + keyword)
     /// </summary>
     public async Task<List<ContextDocument>> SearchAsync(string query, int topResults = 5)
     {
@@ -194,43 +194,88 @@ public class ContextSearchService : IContextService
 
         try
         {
-            // Generate embedding for the query
+            var results = new List<(ContextDocument Doc, double Score)>();
+            
+            // STEP 1: Keyword/exact match search (for short terms like "IGA", codes, abbreviations)
+            var keywordMatches = SearchByKeyword(query);
+            foreach (var doc in keywordMatches)
+            {
+                results.Add((doc, 1.0)); // High score for exact matches
+            }
+            _logger.LogInformation("Keyword search for '{Query}' found {Count} matches", query, keywordMatches.Count);
+
+            // STEP 2: Semantic search (for longer queries and contextual matching)
             var queryEmbedding = await _embeddingClient.GenerateEmbeddingAsync(query);
             var queryVector = queryEmbedding.Value.ToFloats();
 
-            // Calculate cosine similarity with all documents
-            var allResults = _documents
+            var semanticResults = _documents
+                .Where(doc => !keywordMatches.Contains(doc)) // Exclude already found
                 .Select(doc => new
                 {
                     Document = doc,
                     Score = CosineSimilarity(queryVector, doc.Embedding)
                 })
+                .Where(x => x.Score > 0.2)
                 .OrderByDescending(x => x.Score)
+                .Take(topResults)
                 .ToList();
 
-            // Log top results for debugging
-            _logger.LogInformation("Context search for '{Query}': Top 5 scores: {Scores}", 
-                query, 
-                string.Join(", ", allResults.Take(5).Select(r => $"{r.Document.Name}:{r.Score:F3}")));
+            foreach (var item in semanticResults)
+            {
+                results.Add((item.Document, item.Score));
+            }
 
-            var results = allResults
+            // Log top results for debugging
+            _logger.LogInformation("Context search for '{Query}': Combined results: {Results}", 
+                query, 
+                string.Join(", ", results.Take(5).Select(r => $"{r.Doc.Name}:{r.Score:F3}")));
+
+            // Return unique results, prioritizing higher scores
+            var finalResults = results
+                .GroupBy(r => r.Doc.Id)
+                .Select(g => g.OrderByDescending(r => r.Score).First())
+                .OrderByDescending(r => r.Score)
                 .Take(topResults)
-                .Where(x => x.Score > 0.2) // Lowered threshold to 0.2
-                .Select(x =>
+                .Select(r =>
                 {
-                    x.Document.SearchScore = x.Score;
-                    return x.Document;
+                    r.Doc.SearchScore = r.Score;
+                    return r.Doc;
                 })
                 .ToList();
 
-            _logger.LogInformation("Context search returned {Count} results above threshold", results.Count);
-            return results;
+            _logger.LogInformation("Context search returned {Count} total results", finalResults.Count);
+            return finalResults;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error searching context documents");
             return new List<ContextDocument>();
         }
+    }
+
+    /// <summary>
+    /// Search by keyword/exact match (case-insensitive)
+    /// Great for short terms, codes, abbreviations
+    /// </summary>
+    private List<ContextDocument> SearchByKeyword(string query)
+    {
+        var terms = query.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Where(t => t.Length >= 2) // At least 2 characters
+            .Select(t => t.ToLowerInvariant())
+            .ToList();
+
+        if (!terms.Any()) return new List<ContextDocument>();
+
+        return _documents.Where(doc =>
+        {
+            var searchableText = $"{doc.Name} {doc.Description} {doc.Keywords}".ToLowerInvariant();
+            
+            // Check if any term matches exactly or as word boundary
+            return terms.Any(term => 
+                searchableText.Contains(term) ||
+                // Also check Name field specifically for codes like "IGA"
+                doc.Name.Contains(term, StringComparison.OrdinalIgnoreCase));
+        }).ToList();
     }
 
     /// <summary>
