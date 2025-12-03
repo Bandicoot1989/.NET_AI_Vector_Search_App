@@ -7,7 +7,7 @@ using System.Text;
 namespace RecipeSearchWeb.Services;
 
 /// <summary>
-/// AI Agent service that answers questions using the Knowledge Base, Context Documents, SharePoint KB, and Confluence
+/// AI Agent service that answers questions using the Knowledge Base and Context Documents
 /// Uses RAG (Retrieval Augmented Generation) with existing embeddings
 /// </summary>
 public class KnowledgeAgentService : IKnowledgeAgentService
@@ -15,15 +15,13 @@ public class KnowledgeAgentService : IKnowledgeAgentService
     private readonly ChatClient _chatClient;
     private readonly KnowledgeSearchService _knowledgeService;
     private readonly ContextSearchService _contextService;
-    private readonly SharePointKnowledgeService _sharePointService;
-    private readonly ConfluenceKnowledgeService _confluenceService;
     private readonly ILogger<KnowledgeAgentService> _logger;
     
     private const string SystemPrompt = @"You are a helpful IT Operations assistant for the company's internal Knowledge Base and ServiceDesk.
 Your role is to help employees find information, answer questions, and guide them to the right resources.
 
 Guidelines:
-- Answer questions accurately based on the provided context from the Knowledge Base, SharePoint KB, Confluence, and reference data
+- Answer questions accurately based on the provided context from the Knowledge Base and reference data
 - If a ServiceDesk ticket category is relevant, provide the direct link to create a ticket
 - If the information is not available in the context, say so clearly
 - Be concise but complete in your answers
@@ -31,8 +29,6 @@ Guidelines:
 - Reference the KB article number when relevant (e.g., 'According to KB0013350...')
 - If multiple articles are relevant, synthesize the information
 - When suggesting to open a ticket, always include the direct URL if available
-- For SharePoint KB documents, reference the folder category (Business Solutions, IT Operations, Technology, etc.)
-- For Confluence pages, reference the space and page title
 - Respond in the same language as the user's question
 - Be professional and helpful
 
@@ -43,8 +39,6 @@ If you cannot find relevant information, suggest the user contact the IT Help De
         IConfiguration configuration,
         KnowledgeSearchService knowledgeService,
         ContextSearchService contextService,
-        SharePointKnowledgeService sharePointService,
-        ConfluenceKnowledgeService confluenceService,
         ILogger<KnowledgeAgentService> logger)
     {
         // IMPORTANT: GPT_NAME is for embeddings, CHAT_NAME is for chat completions
@@ -57,8 +51,6 @@ If you cannot find relevant information, suggest the user contact the IT Help De
         _chatClient = azureClient.GetChatClient(chatModel);
         _knowledgeService = knowledgeService;
         _contextService = contextService;
-        _sharePointService = sharePointService;
-        _confluenceService = confluenceService;
     }
 
     /// <summary>
@@ -74,16 +66,10 @@ If you cannot find relevant information, suggest the user contact the IT Help De
             // 2. Search context documents (tickets, URLs, etc.)
             var contextDocs = await _contextService.SearchAsync(question, topResults: 5);
             
-            // 3. Search SharePoint Digitalization KB
-            var sharePointDocs = await _sharePointService.SearchAsync(question, topResults: 5);
+            // 3. Build context from both sources
+            var context = BuildContext(relevantArticles, contextDocs);
             
-            // 4. Search Confluence KB
-            var confluencePages = await _confluenceService.SearchAsync(question, topResults: 5);
-            
-            // 5. Build context from all sources
-            var context = BuildContext(relevantArticles, contextDocs, sharePointDocs, confluencePages);
-            
-            // 6. Build the messages for the chat
+            // 3. Build the messages for the chat
             var messages = new List<ChatMessage>
             {
                 new SystemChatMessage(SystemPrompt)
@@ -96,7 +82,7 @@ If you cannot find relevant information, suggest the user contact the IT Help De
             }
 
             // Add the context and question
-            var userMessage = $@"Context from Knowledge Base, SharePoint KB, Confluence KB, and Reference Data:
+            var userMessage = $@"Context from Knowledge Base and Reference Data:
 {context}
 
 User Question: {question}
@@ -105,12 +91,12 @@ Please answer based on the context provided above. If there's a relevant ticket 
 
             messages.Add(new UserChatMessage(userMessage));
 
-            // 7. Get AI response
+            // 4. Get AI response
             var response = await _chatClient.CompleteChatAsync(messages);
             var answer = response.Value.Content[0].Text;
 
-            _logger.LogInformation("Agent answered question: {Question} using {ArticleCount} KB articles, {SharePointCount} SharePoint docs, {ConfluenceCount} Confluence pages", 
-                question.Substring(0, Math.Min(50, question.Length)), relevantArticles.Count, sharePointDocs.Count, confluencePages.Count);
+            _logger.LogInformation("Agent answered question: {Question} using {ArticleCount} articles", 
+                question.Substring(0, Math.Min(50, question.Length)), relevantArticles.Count);
 
             return new AgentResponse
             {
@@ -120,18 +106,6 @@ Please answer based on the context provided above. If there's a relevant ticket 
                     KBNumber = a.KBNumber,
                     Title = a.Title,
                     Score = (float)a.SearchScore
-                }).ToList(),
-                SharePointSources = sharePointDocs.Select(d => new SharePointReference
-                {
-                    Title = d.Title,
-                    Folder = d.Folder,
-                    WebUrl = d.WebUrl
-                }).ToList(),
-                ConfluenceSources = confluencePages.Select(p => new ConfluenceReference
-                {
-                    Title = p.Title,
-                    SpaceKey = p.SpaceKey,
-                    WebUrl = p.WebUrl
                 }).ToList(),
                 Success = true
             };
@@ -159,16 +133,10 @@ Please answer based on the context provided above. If there's a relevant ticket 
         // 2. Search context documents
         var contextDocs = await _contextService.SearchAsync(question, topResults: 5);
         
-        // 3. Search SharePoint KB
-        var sharePointDocs = await _sharePointService.SearchAsync(question, topResults: 5);
+        // 3. Build context from both sources
+        var context = BuildContext(relevantArticles, contextDocs);
         
-        // 4. Search Confluence KB
-        var confluencePages = await _confluenceService.SearchAsync(question, topResults: 5);
-        
-        // 5. Build context from all sources
-        var context = BuildContext(relevantArticles, contextDocs, sharePointDocs, confluencePages);
-        
-        // 6. Build the messages for the chat
+        // 4. Build the messages for the chat
         var messages = new List<ChatMessage>
         {
             new SystemChatMessage(SystemPrompt)
@@ -181,7 +149,7 @@ Please answer based on the context provided above. If there's a relevant ticket 
         }
 
         // Add the context and question
-        var userMessage = $@"Context from Knowledge Base, SharePoint KB, Confluence KB, and Reference Data:
+        var userMessage = $@"Context from Knowledge Base and Reference Data:
 {context}
 
 User Question: {question}
@@ -190,7 +158,7 @@ Please answer based on the context provided above. If there's a relevant ticket 
 
         messages.Add(new UserChatMessage(userMessage));
 
-        // 7. Stream the response
+        // 5. Stream the response
         await foreach (var update in _chatClient.CompleteChatStreamingAsync(messages))
         {
             foreach (var part in update.ContentUpdate)
@@ -204,9 +172,9 @@ Please answer based on the context provided above. If there's a relevant ticket 
     }
 
     /// <summary>
-    /// Build context string from relevant articles, context documents, SharePoint docs, and Confluence pages
+    /// Build context string from relevant articles and context documents
     /// </summary>
-    private string BuildContext(List<KnowledgeArticle> articles, List<ContextDocument> contextDocs, List<SharePointDocument> sharePointDocs, List<ConfluencePage> confluencePages)
+    private string BuildContext(List<KnowledgeArticle> articles, List<ContextDocument> contextDocs)
     {
         var sb = new StringBuilder();
         
@@ -272,69 +240,10 @@ Please answer based on the context provided above. If there's a relevant ticket 
                 sb.AppendLine();
             }
         }
-
-        // Add SharePoint KB documents
-        if (sharePointDocs.Any())
-        {
-            sb.AppendLine("=== SHAREPOINT DIGITALIZATION KB ===");
-            foreach (var doc in sharePointDocs.Take(3))
-            {
-                sb.AppendLine($"--- {doc.Folder}: {doc.Title} ---");
-                
-                if (!string.IsNullOrWhiteSpace(doc.Content))
-                {
-                    var content = doc.Content;
-                    if (content.Length > 2000)
-                    {
-                        content = content.Substring(0, 2000) + "...";
-                    }
-                    sb.AppendLine($"Content: {content}");
-                }
-                
-                if (!string.IsNullOrWhiteSpace(doc.WebUrl))
-                {
-                    sb.AppendLine($"Source: {doc.WebUrl}");
-                }
-                
-                sb.AppendLine();
-            }
-        }
-
-        // Add Confluence pages
-        if (confluencePages.Any())
-        {
-            sb.AppendLine("=== CONFLUENCE KNOWLEDGE BASE ===");
-            foreach (var page in confluencePages.Take(3))
-            {
-                sb.AppendLine($"--- [{page.SpaceKey}] {page.Title} ---");
-                
-                if (!string.IsNullOrWhiteSpace(page.Content))
-                {
-                    var content = page.Content;
-                    if (content.Length > 2000)
-                    {
-                        content = content.Substring(0, 2000) + "...";
-                    }
-                    sb.AppendLine($"Content: {content}");
-                }
-                
-                if (page.Labels?.Any() == true)
-                {
-                    sb.AppendLine($"Labels: {string.Join(", ", page.Labels)}");
-                }
-                
-                if (!string.IsNullOrWhiteSpace(page.WebUrl))
-                {
-                    sb.AppendLine($"Source: {page.WebUrl}");
-                }
-                
-                sb.AppendLine();
-            }
-        }
         
-        if (!articles.Any() && !contextDocs.Any() && !sharePointDocs.Any() && !confluencePages.Any())
+        if (!articles.Any() && !contextDocs.Any())
         {
-            return "No relevant information found in the Knowledge Base, SharePoint KB, Confluence KB, or reference data.";
+            return "No relevant information found in the Knowledge Base or reference data.";
         }
 
         return sb.ToString();
@@ -348,8 +257,6 @@ public class AgentResponse
 {
     public string Answer { get; set; } = string.Empty;
     public List<ArticleReference> RelevantArticles { get; set; } = new();
-    public List<SharePointReference> SharePointSources { get; set; } = new();
-    public List<ConfluenceReference> ConfluenceSources { get; set; } = new();
     public bool Success { get; set; }
     public string? Error { get; set; }
 }
@@ -362,24 +269,4 @@ public class ArticleReference
     public string KBNumber { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public float Score { get; set; }
-}
-
-/// <summary>
-/// Reference to a SharePoint document used in the response
-/// </summary>
-public class SharePointReference
-{
-    public string Title { get; set; } = string.Empty;
-    public string Folder { get; set; } = string.Empty;
-    public string WebUrl { get; set; } = string.Empty;
-}
-
-/// <summary>
-/// Reference to a Confluence page used in the response
-/// </summary>
-public class ConfluenceReference
-{
-    public string Title { get; set; } = string.Empty;
-    public string SpaceKey { get; set; } = string.Empty;
-    public string WebUrl { get; set; } = string.Empty;
 }
