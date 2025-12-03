@@ -755,5 +755,42 @@ foreach (var kvp in linkPlaceholders)
 - Autenticación con API Token (soporte Base64 para tokens con caracteres especiales)
 - Cache de páginas en Azure Blob Storage
 - Búsqueda semántica con embeddings
+- **Multi-space sync**: Soporte para múltiples espacios (GAUKB, OPER, TECH, SDPA)
+- **Sync individual**: Método `SyncSingleSpaceAsync()` para evitar timeouts
+- **URLs en contexto**: Las páginas incluyen su URL web para referencias
+
+---
+
+## 🆕 Cambios Recientes (Dic 3, 2025)
+
+### Confluence Multi-Space Sync
+- **Configuración**: `Confluence__SpaceKeys` acepta múltiples spaces separados por coma
+- **Nuevo método**: `SyncSingleSpaceAsync(spaceKey)` para sincronizar un space individual
+- **Nuevo método**: `GetConfiguredSpaceKeys()` para listar spaces configurados
+- **Mejora**: Logging detallado durante sincronización
+
+### Botón Sync Confluence en KB Admin
+- **Ubicación**: Sección nueva en `/knowledge/admin` (visible solo si Confluence está configurado)
+- **Características**:
+  - Panel con estadísticas: total de páginas, desglose por space
+  - Botón "🔄 Sync All Spaces" - sincroniza todos los spaces secuencialmente
+  - Botones individuales por space para sincronización selectiva
+  - Spinner y mensajes de progreso durante sync
+  - Mensajes de éxito ✅ o error ❌ al finalizar
+
+### System Prompt Mejorado para Chat Bot
+- **Priorización**: Documentación Confluence ANTES de sugerir tickets
+- **URLs de referencia**: Incluye link a la página de Confluence en respuestas
+- **Formato**: `📖 [Título del documento](URL)` para referencias
+- **Casos especiales**: B2B Portals (BMW, VW, Ford), SAP, Zscaler
+
+### Limpieza de Código
+- **Eliminado**: Teams Bot integration completo
+  - Carpeta `Bot/` (AdapterWithErrorHandler, OperationsBot)
+  - Carpeta `TeamsManifest/`
+  - Paquete `Microsoft.Bot.Builder.Integration.AspNet.Core`
+  - Endpoints `/api/messages`, `/api/bot-test`, `/api/bot-status`
+  - Configuración `Bot:` en appsettings.json
+  - Documentación `TEAMS_INTEGRATION.md`
 
 ---

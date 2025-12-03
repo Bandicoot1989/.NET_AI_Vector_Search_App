@@ -20,6 +20,7 @@ RecipeSearchWeb/
 │   ├── IKnowledgeService.cs   # Búsqueda de artículos KB
 │   ├── IEmbeddingService.cs   # Generación de embeddings AI
 │   ├── IAuthService.cs        # Autenticación Azure Easy Auth
+│   ├── IConfluenceService.cs  # Integración con Confluence
 │   ├── IScriptStorageService.cs
 │   ├── IKnowledgeStorageService.cs
 │   ├── IImageStorageService.cs
@@ -31,6 +32,7 @@ RecipeSearchWeb/
 │   ├── ScriptSearchService.cs          : IScriptService
 │   ├── KnowledgeSearchService.cs       : IKnowledgeService
 │   ├── AzureAuthService.cs             : IAuthService
+│   ├── ConfluenceKnowledgeService.cs   : IConfluenceService
 │   ├── ScriptStorageService.cs         : IScriptStorageService
 │   ├── KnowledgeStorageService.cs      : IKnowledgeStorageService
 │   ├── KnowledgeImageService.cs        : IImageStorageService
@@ -48,12 +50,17 @@ RecipeSearchWeb/
 ├── Models/                    # DTOs y entidades de datos
 │   ├── Script.cs
 │   ├── KnowledgeArticle.cs
+│   ├── ConfluencePage.cs
 │   ├── User.cs
 │   └── ContextDocument.cs
 │
 ├── Components/                # Capa de Presentación (Blazor)
 │   ├── Pages/
+│   │   ├── Knowledge.razor
+│   │   ├── KnowledgeAdmin.razor  # Incluye Confluence Sync UI
+│   │   └── ...
 │   └── Layout/
+│       └── KnowledgeChat.razor   # Chat Bot RAG
 │
 └── Program.cs                 # Punto de entrada con DI limpia
 ```
@@ -102,6 +109,21 @@ public interface IKnowledgeAgentService
 }
 ```
 
+### IConfluenceService
+```csharp
+public interface IConfluenceService
+{
+    bool IsConfigured { get; }
+    Task InitializeAsync();
+    Task<List<ConfluencePage>> GetAllPagesAsync();
+    Task<List<ConfluencePage>> SearchAsync(string query, int topResults = 5);
+    Task<int> SyncPagesAsync();
+    Task<(int count, string message)> SyncSingleSpaceAsync(string spaceKey);
+    string[] GetConfiguredSpaceKeys();
+    int GetCachedPageCount();
+}
+```
+
 ### IAuthService
 ```csharp
 public interface IAuthService
@@ -119,10 +141,11 @@ public interface IAuthService
 ```csharp
 // Add all Operations One Centre services with clean architecture pattern
 builder.Services.AddStorageServices();     // Azure Blob Storage services
-builder.Services.AddSearchServices();       // Vector search with embeddings
-builder.Services.AddAgentServices();        // AI RAG Agent
-builder.Services.AddAuthServices();         // Azure Easy Auth
-builder.Services.AddDocumentServices();     // Word/PDF processing
+builder.Services.AddConfluenceServices();  // Confluence KB integration
+builder.Services.AddSearchServices();      // Vector search with embeddings
+builder.Services.AddAgentServices();       // AI RAG Agent
+builder.Services.AddAuthServices();        // Azure Easy Auth
+builder.Services.AddDocumentServices();    // Word/PDF processing
 
 // Initialize all services
 await app.Services.InitializeServicesWithLoggingAsync(app.Logger);
@@ -133,6 +156,7 @@ await app.Services.InitializeServicesWithLoggingAsync(app.Logger);
 | Método | Servicios Registrados |
 |--------|----------------------|
 | `AddStorageServices()` | ScriptStorageService, KnowledgeStorageService, KnowledgeImageService, ContextStorageService |
+| `AddConfluenceServices()` | ConfluenceKnowledgeService |
 | `AddSearchServices()` | ScriptSearchService, KnowledgeSearchService, ContextSearchService |
 | `AddAgentServices()` | KnowledgeAgentService |
 | `AddAuthServices()` | HttpContextAccessor, AzureAuthService, UserStateService |

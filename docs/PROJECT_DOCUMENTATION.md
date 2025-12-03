@@ -163,6 +163,12 @@ RecipeSearchWeb/
   - Upload de Word docs
   - Editor de artículos completo
   - Gestor de imágenes con upload múltiple
+  - **Confluence Sync Panel**: 
+    - Vista de spaces configurados con conteo de páginas
+    - Botón "🔄 Sync All Spaces" para sincronizar todos
+    - Botones individuales por space para sincronización selectiva
+    - Progress visual durante sincronización
+    - Mensajes de éxito/error
 
 ### 4. Knowledge Chat Bot (Burbuja 🤖)
 
@@ -401,8 +407,11 @@ Configurado en `appsettings.json`:
   "AZURE_OPENAI_GPT_NAME": "text-embedding-3-small",
   "AZURE_OPENAI_CHAT_NAME": "gpt-4o-mini",
   "AZURE_OPENAI_API_KEY": "xxx",
-  "AzureBlobStorage": {
-    "ConnectionString": "xxx"
+  "AzureStorage": {
+    "ConnectionString": "xxx",
+    "ContainerName": "scripts",
+    "KnowledgeContainerName": "knowledge",
+    "ConfluenceCacheContainer": "confluence-cache"
   },
   "Authorization": {
     "AdminEmails": [
@@ -414,7 +423,7 @@ Configurado en `appsettings.json`:
     "BaseUrl": "https://your-domain.atlassian.net",
     "Email": "your-email@company.com",
     "ApiTokenBase64": "BASE64_ENCODED_API_TOKEN",
-    "SpaceKeys": ["SPACE1", "SPACE2"]
+    "SpaceKeys": "GAUKB,OPER,TECH,SDPA"
   }
 }
 ```
@@ -482,6 +491,10 @@ az webapp deploy --name <app> --src-path publish.zip
 | Dic 2, 2025 | 3.1 | Integración Confluence KB |
 | Dic 2, 2025 | 3.2 | Context Documents (Jira tickets desde Excel) |
 | Dic 3, 2025 | 3.3 | Fix: Markdown links en chat bot (preservar antes de HtmlEncode) |
+| Dic 3, 2025 | 3.4 | **Confluence Multi-Space Sync** - Soporte para múltiples spaces (GAUKB, OPER, TECH, SDPA) |
+| Dic 3, 2025 | 3.5 | **Botón Sync Confluence** en KB Admin - Sincronización con un click, progress visual |
+| Dic 3, 2025 | 3.6 | System prompt mejorado - Prioriza documentación Confluence, incluye URLs de páginas |
+| Dic 3, 2025 | 3.7 | Limpieza: Eliminado Teams Bot integration (no se implementará) |
 
 ---
 
