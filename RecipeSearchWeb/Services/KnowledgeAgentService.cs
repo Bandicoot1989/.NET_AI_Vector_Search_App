@@ -130,48 +130,288 @@ Te recomiendo [abrir un ticket en MyTicket](https://antolin.atlassian.net/servic
             confluenceService?.IsConfigured == true ? "Configured" : "Not configured");
     }
 
+    #region Query Analysis (Tier 1 Optimizations)
+    
+    /// <summary>
+    /// Detected intent type for the query
+    /// </summary>
+    private enum QueryIntent
+    {
+        TicketRequest,      // User wants to open a ticket
+        HowTo,              // User wants step-by-step instructions
+        Information,        // User wants general information
+        Lookup,             // User wants to look up a specific code/name (centre, company)
+        Troubleshooting,    // User has a problem to solve
+        General             // General question
+    }
+    
+    /// <summary>
+    /// Search weights based on intent
+    /// </summary>
+    private class SearchWeights
+    {
+        public double JiraTicketWeight { get; set; } = 1.0;
+        public double ConfluenceWeight { get; set; } = 1.0;
+        public double KBWeight { get; set; } = 1.0;
+        public double ReferenceDataWeight { get; set; } = 1.0;
+        public int JiraTopResults { get; set; } = 5;
+        public int ConfluenceTopResults { get; set; } = 5;
+    }
+    
+    /// <summary>
+    /// Detect the intent of the user's query
+    /// </summary>
+    private QueryIntent DetectIntent(string query)
+    {
+        var lower = query.ToLowerInvariant();
+        
+        // Ticket request indicators
+        if (lower.Contains("ticket") || lower.Contains("abrir") || lower.Contains("solicitar") ||
+            lower.Contains("request") || lower.Contains("open") || lower.Contains("crear solicitud") ||
+            lower.Contains("formulario") || lower.Contains("form"))
+        {
+            return QueryIntent.TicketRequest;
+        }
+        
+        // How-to indicators
+        if (lower.Contains("cómo") || lower.Contains("como") || lower.Contains("how") ||
+            lower.Contains("pasos") || lower.Contains("steps") || lower.Contains("proceso") ||
+            lower.Contains("procedimiento") || lower.Contains("procedure") || lower.Contains("tutorial"))
+        {
+            return QueryIntent.HowTo;
+        }
+        
+        // Lookup indicators (short codes, "qué es", "what is")
+        if (lower.Contains("qué es") || lower.Contains("que es") || lower.Contains("what is") ||
+            lower.Contains("qué centro") || lower.Contains("que centro") || lower.Contains("qué planta") ||
+            lower.Contains("qué compañía") || lower.Contains("que compañia"))
+        {
+            return QueryIntent.Lookup;
+        }
+        
+        // Troubleshooting indicators
+        if (lower.Contains("error") || lower.Contains("problema") || lower.Contains("problem") ||
+            lower.Contains("no funciona") || lower.Contains("not working") || lower.Contains("falla") ||
+            lower.Contains("ayuda") || lower.Contains("help") || lower.Contains("issue"))
+        {
+            return QueryIntent.Troubleshooting;
+        }
+        
+        return QueryIntent.General;
+    }
+    
+    /// <summary>
+    /// Get search weights based on detected intent
+    /// </summary>
+    private SearchWeights GetSearchWeights(QueryIntent intent)
+    {
+        return intent switch
+        {
+            QueryIntent.TicketRequest => new SearchWeights
+            {
+                JiraTicketWeight = 2.5,      // Strong priority for tickets
+                ConfluenceWeight = 0.5,
+                KBWeight = 0.3,
+                ReferenceDataWeight = 0.2,
+                JiraTopResults = 10,
+                ConfluenceTopResults = 3
+            },
+            QueryIntent.HowTo => new SearchWeights
+            {
+                JiraTicketWeight = 0.5,
+                ConfluenceWeight = 2.5,      // Strong priority for documentation
+                KBWeight = 1.5,
+                ReferenceDataWeight = 0.3,
+                JiraTopResults = 3,
+                ConfluenceTopResults = 8
+            },
+            QueryIntent.Lookup => new SearchWeights
+            {
+                JiraTicketWeight = 0.2,
+                ConfluenceWeight = 0.5,
+                KBWeight = 0.3,
+                ReferenceDataWeight = 3.0,   // Strong priority for reference data
+                JiraTopResults = 2,
+                ConfluenceTopResults = 2
+            },
+            QueryIntent.Troubleshooting => new SearchWeights
+            {
+                JiraTicketWeight = 1.5,      // Need both docs and tickets
+                ConfluenceWeight = 2.0,
+                KBWeight = 1.5,
+                ReferenceDataWeight = 0.3,
+                JiraTopResults = 5,
+                ConfluenceTopResults = 6
+            },
+            _ => new SearchWeights() // Default weights (all 1.0)
+        };
+    }
+    
+    /// <summary>
+    /// Decompose complex queries into sub-queries
+    /// </summary>
+    private List<string> DecomposeQuery(string query)
+    {
+        var subQueries = new List<string> { query }; // Always include original
+        var lower = query.ToLowerInvariant();
+        
+        // Check for compound questions (and/y, or/o)
+        if (lower.Contains(" y ") || lower.Contains(" and "))
+        {
+            var parts = query.Split(new[] { " y ", " Y ", " and ", " AND " }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length > 1)
+            {
+                subQueries.AddRange(parts.Select(p => p.Trim()));
+            }
+        }
+        
+        // Check for multiple questions (?, multiple verbs)
+        var questionMarks = query.Count(c => c == '?');
+        if (questionMarks > 1)
+        {
+            var parts = query.Split('?', StringSplitOptions.RemoveEmptyEntries);
+            subQueries.AddRange(parts.Select(p => p.Trim() + "?"));
+        }
+        
+        // Extract specific entity queries (SAP, VPN, etc.)
+        var entities = ExtractEntities(query);
+        foreach (var entity in entities)
+        {
+            if (!subQueries.Any(q => q.Contains(entity, StringComparison.OrdinalIgnoreCase)))
+            {
+                // Create entity-specific sub-query
+                if (lower.Contains("ticket"))
+                    subQueries.Add($"ticket {entity}");
+                if (lower.Contains("cómo") || lower.Contains("como") || lower.Contains("how"))
+                    subQueries.Add($"how to {entity}");
+            }
+        }
+        
+        _logger.LogInformation("Query decomposition: Original='{Original}', SubQueries=[{SubQueries}]", 
+            query, string.Join(", ", subQueries));
+        
+        return subQueries.Distinct().ToList();
+    }
+    
+    /// <summary>
+    /// Extract known entities from query
+    /// </summary>
+    private List<string> ExtractEntities(string query)
+    {
+        var entities = new List<string>();
+        var lower = query.ToLowerInvariant();
+        
+        // Technology/System entities
+        var knownSystems = new[] { "sap", "vpn", "zscaler", "teams", "outlook", "sharepoint", 
+            "confluence", "jira", "teamcenter", "bmw", "volkswagen", "vw", "ford", "b2b" };
+        
+        foreach (var system in knownSystems)
+        {
+            if (lower.Contains(system))
+                entities.Add(system.ToUpperInvariant());
+        }
+        
+        // Extract potential plant codes (2-4 uppercase letters)
+        var words = query.Split(new[] { ' ', '?', '¿', '!', '¡', ',', '.' }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var word in words)
+        {
+            if (word.Length >= 2 && word.Length <= 4 && word.All(char.IsLetter) && word == word.ToUpperInvariant())
+            {
+                entities.Add(word);
+            }
+        }
+        
+        return entities.Distinct().ToList();
+    }
+    
+    #endregion
+
     /// <summary>
     /// Process a user question and return an AI-generated answer
+    /// Uses Tier 1 optimizations: Intent Detection, Weighted Search, Query Decomposition
     /// </summary>
     public async Task<AgentResponse> AskAsync(string question, List<ChatMessage>? conversationHistory = null)
     {
         try
         {
-            // Expand the query with related terms for better ticket matching
+            // === TIER 1 OPTIMIZATION: Intent Detection ===
+            var intent = DetectIntent(question);
+            var weights = GetSearchWeights(intent);
+            _logger.LogInformation("Query analysis: Intent={Intent}, Weights=[Jira:{JiraW}, Confluence:{ConfW}, Ref:{RefW}]",
+                intent, weights.JiraTicketWeight, weights.ConfluenceWeight, weights.ReferenceDataWeight);
+            
+            // === TIER 1 OPTIMIZATION: Query Decomposition ===
+            var subQueries = DecomposeQuery(question);
+            
+            // Expand the main query with related terms
             var expandedQuery = ExpandQueryWithSynonyms(question);
             _logger.LogInformation("Original query: {Original}, Expanded: {Expanded}", question, expandedQuery);
             
             // 1. Search the Knowledge Base for relevant articles
             var relevantArticles = await _knowledgeService.SearchArticlesAsync(question, topResults: 5);
             
-            // 2. Search context documents (tickets, URLs, etc.) with BOTH original and expanded query
-            // Use more results to ensure we get both reference data AND tickets
-            var contextResults1 = await _contextService.SearchAsync(question, topResults: 10);
-            var contextResults2 = await _contextService.SearchAsync(expandedQuery, topResults: 10);
-            var contextDocs = contextResults1.Concat(contextResults2)
+            // 2. Search context documents with ALL sub-queries for better coverage
+            var allContextResults = new List<ContextDocument>();
+            foreach (var subQuery in subQueries.Take(3)) // Limit to 3 sub-queries
+            {
+                var results = await _contextService.SearchAsync(subQuery, topResults: 8);
+                allContextResults.AddRange(results);
+            }
+            // Also search with expanded query
+            var expandedResults = await _contextService.SearchAsync(expandedQuery, topResults: 8);
+            allContextResults.AddRange(expandedResults);
+            
+            // === TIER 1 OPTIMIZATION: Weighted Results ===
+            // Apply weights based on intent and deduplicate
+            var contextDocs = allContextResults
                 .GroupBy(d => d.Id)
                 .Select(g => g.First())
+                .Select(d => {
+                    // Boost score based on intent weights
+                    if (!string.IsNullOrWhiteSpace(d.Link) && d.Link.Contains("atlassian.net/servicedesk"))
+                        d.SearchScore *= weights.JiraTicketWeight;
+                    else
+                        d.SearchScore *= weights.ReferenceDataWeight;
+                    return d;
+                })
+                .OrderByDescending(d => d.SearchScore)
                 .Take(15)
                 .ToList();
             
-            _logger.LogInformation("Context search: {Count1} from original, {Count2} from expanded, {Total} combined", 
-                contextResults1.Count, contextResults2.Count, contextDocs.Count);
+            _logger.LogInformation("Context search: {Total} combined results after weighting", contextDocs.Count);
             
-            // 3. Search Confluence KB with BOTH original and expanded query for better results
+            // 3. Search Confluence KB with weighted results
             var confluencePages = new List<ConfluencePage>();
             if (_confluenceService?.IsConfigured == true)
             {
-                var results1 = await _confluenceService.SearchAsync(question, topResults: 5);
-                var results2 = await _confluenceService.SearchAsync(expandedQuery, topResults: 5);
-                confluencePages = results1.Concat(results2)
+                var allConfluenceResults = new List<ConfluencePage>();
+                
+                // Search with original and expanded queries
+                var results1 = await _confluenceService.SearchAsync(question, topResults: weights.ConfluenceTopResults);
+                var results2 = await _confluenceService.SearchAsync(expandedQuery, topResults: weights.ConfluenceTopResults);
+                allConfluenceResults.AddRange(results1);
+                allConfluenceResults.AddRange(results2);
+                
+                // Also search with entity-specific queries for HowTo intent
+                if (intent == QueryIntent.HowTo || intent == QueryIntent.Troubleshooting)
+                {
+                    var entities = ExtractEntities(question);
+                    foreach (var entity in entities.Take(2))
+                    {
+                        var entityResults = await _confluenceService.SearchAsync(entity, topResults: 3);
+                        allConfluenceResults.AddRange(entityResults);
+                    }
+                }
+                
+                confluencePages = allConfluenceResults
                     .GroupBy(p => p.Title)
                     .Select(g => g.First())
-                    .Take(6)
+                    .Take(8)
                     .ToList();
             }
             
-            // 4. Build context from all sources
-            var context = BuildContext(relevantArticles, contextDocs, confluencePages);
+            // 4. Build context from all sources (weights are already applied)
+            var context = BuildContextWeighted(relevantArticles, contextDocs, confluencePages, weights);
             
             // 5. Build the messages for the chat
             var messages = new List<ChatMessage>
@@ -185,10 +425,20 @@ Te recomiendo [abrir un ticket en MyTicket](https://antolin.atlassian.net/servic
                 messages.AddRange(conversationHistory);
             }
 
-            // Add the context and question
+            // Add the context and question with intent hint
+            var intentHint = intent switch
+            {
+                QueryIntent.TicketRequest => "The user wants to open a support ticket. Prioritize showing the specific ticket URL.",
+                QueryIntent.HowTo => "The user wants step-by-step instructions. Provide detailed procedures from documentation.",
+                QueryIntent.Lookup => "The user wants to look up specific information. Provide the exact data requested.",
+                QueryIntent.Troubleshooting => "The user has a problem. Provide solutions and relevant ticket links if needed.",
+                _ => ""
+            };
+            
             var userMessage = $@"Context from Knowledge Base, Confluence KB, and Reference Data:
 {context}
 
+{(string.IsNullOrEmpty(intentHint) ? "" : $"INTENT HINT: {intentHint}\n")}
 User Question: {question}
 
 Please answer based on the context provided above. If there's a relevant ticket category or URL, include it in your response.";
@@ -199,8 +449,8 @@ Please answer based on the context provided above. If there's a relevant ticket 
             var response = await _chatClient.CompleteChatAsync(messages);
             var answer = response.Value.Content[0].Text;
 
-            _logger.LogInformation("Agent answered question: {Question} using {ArticleCount} KB articles, {ConfluenceCount} Confluence pages", 
-                question.Substring(0, Math.Min(50, question.Length)), relevantArticles.Count, confluencePages.Count);
+            _logger.LogInformation("Agent answered question: Intent={Intent}, {ArticleCount} KB articles, {ConfluenceCount} Confluence pages", 
+                intent, relevantArticles.Count, confluencePages.Count);
 
             // Only return articles with high relevance scores as sources
             // This prevents showing unrelated KB articles as sources
@@ -470,6 +720,184 @@ Please answer based on the context provided above. If there's a relevant ticket 
     }
     
     /// <summary>
+    /// Build context string with weighted priorities based on detected intent
+    /// </summary>
+    private string BuildContextWeighted(List<KnowledgeArticle> articles, List<ContextDocument> contextDocs, 
+        List<ConfluencePage> confluencePages, SearchWeights weights)
+    {
+        var sb = new StringBuilder();
+        
+        _logger.LogInformation("BuildContextWeighted: {ArticleCount} articles, {ContextCount} context docs, {ConfluenceCount} confluence pages",
+            articles.Count, contextDocs.Count, confluencePages.Count);
+        
+        // Separate context documents into categories
+        var jiraTickets = contextDocs.Where(d => 
+            !string.IsNullOrWhiteSpace(d.Link) && 
+            d.Link.Contains("atlassian.net/servicedesk"))
+            .OrderByDescending(d => d.SearchScore)
+            .ToList();
+        
+        var referenceData = contextDocs.Where(d => 
+            string.IsNullOrWhiteSpace(d.Link) || 
+            !d.Link.Contains("atlassian.net/servicedesk"))
+            .OrderByDescending(d => d.SearchScore)
+            .ToList();
+        
+        // Log detailed ticket info for debugging
+        _logger.LogInformation("BuildContextWeighted: {JiraCount} Jira tickets (weight:{JiraW}), {RefCount} reference data (weight:{RefW})", 
+            jiraTickets.Count, weights.JiraTicketWeight, referenceData.Count, weights.ReferenceDataWeight);
+        
+        foreach (var ticket in jiraTickets.Take(5))
+        {
+            _logger.LogInformation("  Jira ticket found: '{Name}' (Score:{Score}) -> {Link}", 
+                ticket.Name, ticket.SearchScore, ticket.Link);
+        }
+        
+        // Log Confluence pages for debugging
+        foreach (var page in confluencePages.Take(5))
+        {
+            _logger.LogInformation("  Confluence page: '{Title}' -> {Url}", 
+                page.Title, page.WebUrl ?? "NO URL");
+        }
+        
+        // Dynamic ordering based on weights
+        var sections = new List<(string Name, double Weight, Action WriteSection)>
+        {
+            ("Jira", weights.JiraTicketWeight, () => WriteJiraSection(sb, jiraTickets)),
+            ("Confluence", weights.ConfluenceWeight, () => WriteConfluenceSection(sb, confluencePages)),
+            ("Reference", weights.ReferenceDataWeight, () => WriteReferenceSection(sb, referenceData)),
+            ("KB", weights.KBWeight, () => WriteKBSection(sb, articles))
+        };
+        
+        // Write sections in order of weight (highest first)
+        foreach (var section in sections.OrderByDescending(s => s.Weight))
+        {
+            section.WriteSection();
+        }
+        
+        if (!articles.Any() && !contextDocs.Any() && !confluencePages.Any())
+        {
+            return "No relevant information found in the Knowledge Base or reference data.";
+        }
+
+        return sb.ToString();
+    }
+    
+    private void WriteJiraSection(StringBuilder sb, List<ContextDocument> jiraTickets)
+    {
+        if (!jiraTickets.Any()) return;
+        
+        sb.AppendLine("=== JIRA TICKET FORMS - USE THESE FOR SUPPORT REQUESTS ===");
+        sb.AppendLine("When the user needs help, provide the SPECIFIC ticket link that matches their problem.");
+        sb.AppendLine("CRITICAL: Copy the exact markdown link below - do not use generic portal links!");
+        sb.AppendLine();
+        
+        foreach (var doc in jiraTickets.Take(8)) // More tickets when weighted high
+        {
+            sb.AppendLine($"TICKET: {doc.Name}");
+            if (!string.IsNullOrWhiteSpace(doc.Description))
+            {
+                sb.AppendLine($"  Use for: {doc.Description}");
+            }
+            if (!string.IsNullOrWhiteSpace(doc.Keywords))
+            {
+                sb.AppendLine($"  Keywords: {doc.Keywords}");
+            }
+            // Format as markdown for easy copy
+            sb.AppendLine($"  COPY THIS LINK: [{doc.Name}]({doc.Link})");
+            sb.AppendLine();
+        }
+    }
+    
+    private void WriteConfluenceSection(StringBuilder sb, List<ConfluencePage> confluencePages)
+    {
+        if (!confluencePages.Any()) return;
+        
+        sb.AppendLine("=== CONFLUENCE DOCUMENTATION (How-To Guides & Procedures) ===");
+        sb.AppendLine("Use this documentation to answer user questions. INCLUDE the link in your response!");
+        sb.AppendLine();
+        
+        foreach (var page in confluencePages.Take(6)) // More pages when weighted high
+        {
+            sb.AppendLine($"DOCUMENT: {page.Title}");
+            
+            // Make URL very prominent and in markdown format for easy copy
+            if (!string.IsNullOrWhiteSpace(page.WebUrl))
+            {
+                sb.AppendLine($"COPY THIS LINK: [📖 {page.Title}]({page.WebUrl})");
+            }
+            else
+            {
+                _logger.LogWarning("Confluence page '{Title}' has no WebUrl", page.Title);
+            }
+            
+            if (!string.IsNullOrWhiteSpace(page.Content))
+            {
+                var content = page.Content.Length > 2500 ? page.Content.Substring(0, 2500) + "..." : page.Content;
+                sb.AppendLine($"Content: {content}");
+            }
+            sb.AppendLine();
+        }
+    }
+    
+    private void WriteReferenceSection(StringBuilder sb, List<ContextDocument> referenceData)
+    {
+        if (!referenceData.Any()) return;
+        
+        sb.AppendLine("=== REFERENCE DATA (Centres, Companies, etc.) ===");
+        sb.AppendLine("Use this data to answer questions about company codes, plant names, locations, etc.");
+        sb.AppendLine();
+        
+        foreach (var doc in referenceData.Take(12)) // More data when weighted high
+        {
+            sb.AppendLine($"ENTRY: {doc.Name}");
+            if (!string.IsNullOrWhiteSpace(doc.Description))
+            {
+                sb.AppendLine($"  Details: {doc.Description}");
+            }
+            if (!string.IsNullOrWhiteSpace(doc.Keywords))
+            {
+                sb.AppendLine($"  Keywords: {doc.Keywords}");
+            }
+            if (doc.AdditionalData?.Any() == true)
+            {
+                foreach (var kvp in doc.AdditionalData)
+                {
+                    sb.AppendLine($"  {kvp.Key}: {kvp.Value}");
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(doc.Link))
+            {
+                sb.AppendLine($"  Link: {doc.Link}");
+            }
+            sb.AppendLine($"  Source: {doc.SourceFile}");
+            sb.AppendLine();
+        }
+    }
+    
+    private void WriteKBSection(StringBuilder sb, List<KnowledgeArticle> articles)
+    {
+        if (!articles.Any()) return;
+        
+        sb.AppendLine("=== KNOWLEDGE BASE ARTICLES (Internal Procedures) ===");
+        foreach (var article in articles.Take(4))
+        {
+            sb.AppendLine($"--- Article: {article.KBNumber} - {article.Title} ---");
+            if (!string.IsNullOrWhiteSpace(article.ShortDescription))
+            {
+                sb.AppendLine($"Summary: {article.ShortDescription}");
+            }
+            var content = article.Content ?? "";
+            if (content.Length > 1500)
+            {
+                content = content.Substring(0, 1500) + "...";
+            }
+            sb.AppendLine($"Content: {content}");
+            sb.AppendLine();
+        }
+    }
+    
+    /// <summary>
     /// Expand query with synonyms and related terms for better ticket matching
     /// </summary>
     private string ExpandQueryWithSynonyms(string query)
@@ -493,10 +921,27 @@ Please answer based on the context provided above. If there's a relevant ticket 
             expansions.Add("Internet Web Page");
         }
         
-        // Zscaler specific
+        // Zscaler specific - expanded for troubleshooting
         if (lowerQuery.Contains("zscaler") || lowerQuery.Contains("proxy"))
         {
             expansions.Add("remote access VPN");
+            expansions.Add("Zscaler ticket");
+            expansions.Add("Zscaler problem issue");
+            // If it's a problem/issue with Zscaler
+            if (lowerQuery.Contains("no funciona") || lowerQuery.Contains("problema") || lowerQuery.Contains("error") ||
+                lowerQuery.Contains("not working") || lowerQuery.Contains("issue") || lowerQuery.Contains("falla"))
+            {
+                expansions.Add("Zscaler support request");
+                expansions.Add("Zscaler troubleshooting");
+            }
+        }
+        
+        // Problem / Issue / Troubleshooting
+        if (lowerQuery.Contains("no funciona") || lowerQuery.Contains("problema") || lowerQuery.Contains("error") ||
+            lowerQuery.Contains("not working") || lowerQuery.Contains("falla") || lowerQuery.Contains("issue"))
+        {
+            expansions.Add("troubleshooting support request");
+            expansions.Add("ticket problem issue");
         }
         
         // Customer portals / Extranets - user creation and management
