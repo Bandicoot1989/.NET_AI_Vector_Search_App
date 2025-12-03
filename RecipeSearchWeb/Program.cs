@@ -1,8 +1,4 @@
 using Azure.AI.OpenAI;
-using Microsoft.Bot.Builder;
-using Microsoft.Bot.Builder.Integration.AspNet.Core;
-using Microsoft.Bot.Connector.Authentication;
-using RecipeSearchWeb.Bot;
 using RecipeSearchWeb.Components;
 using RecipeSearchWeb.Extensions;
 using RecipeSearchWeb.Services;
@@ -40,13 +36,6 @@ builder.Services.AddSearchServices();       // Vector search with embeddings
 builder.Services.AddAgentServices();        // AI RAG Agent
 builder.Services.AddAuthServices();         // Azure Easy Auth
 builder.Services.AddDocumentServices();     // Word/PDF processing
-
-// ============================================================================
-// Microsoft Teams Bot Integration
-// ============================================================================
-builder.Services.AddSingleton<BotFrameworkAuthentication, ConfigurationBotFrameworkAuthentication>();
-builder.Services.AddSingleton<IBotFrameworkHttpAdapter, AdapterWithErrorHandler>();
-builder.Services.AddTransient<IBot, OperationsBot>();
 
 var app = builder.Build();
 
@@ -374,99 +363,6 @@ app.MapGet("/api/auth-status", (HttpContext httpContext, AzureAuthService authSe
             SimulatedEmail = config["Development:SimulatedUserEmail"] ?? "NOT SET",
             SimulatedName = config["Development:SimulatedUserName"] ?? "NOT SET"
         }
-    });
-}).AllowAnonymous();
-
-// Bot Framework endpoint for Teams - with manual processing fallback
-app.MapPost("/api/messages", async (HttpContext httpContext, IBotFrameworkHttpAdapter adapter, IBot bot, KnowledgeAgentService agentService, ILogger<Program> logger) =>
-{
-    logger.LogInformation("=== BOT ENDPOINT CALLED ===");
-    
-    // Read the body first
-    httpContext.Request.EnableBuffering();
-    using var reader = new StreamReader(httpContext.Request.Body, leaveOpen: true);
-    var body = await reader.ReadToEndAsync();
-    httpContext.Request.Body.Position = 0;
-    
-    logger.LogInformation("Request body length: {Length}", body.Length);
-    
-    try
-    {
-        // Try standard Bot Framework processing
-        await adapter.ProcessAsync(httpContext.Request, httpContext.Response, bot);
-        logger.LogInformation("Standard Bot Framework processing completed");
-    }
-    catch (Exception ex)
-    {
-        logger.LogWarning(ex, "Bot Framework auth failed, trying direct processing: {Message}", ex.Message);
-        
-        // If auth fails, try to process directly
-        try
-        {
-            var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-            var activity = System.Text.Json.JsonSerializer.Deserialize<Microsoft.Bot.Schema.Activity>(body, options);
-            
-            if (activity?.Text != null && activity.Type == "message")
-            {
-                logger.LogInformation("Direct processing message: {Text}", activity.Text);
-                var response = await agentService.AskAsync(activity.Text);
-                
-                // We can't send back through normal channels without proper auth
-                // Just log success
-                logger.LogInformation("Agent response generated successfully: {Success}", response.Success);
-            }
-        }
-        catch (Exception innerEx)
-        {
-            logger.LogError(innerEx, "Direct processing also failed");
-        }
-        
-        // Return 200 to prevent retries
-        if (!httpContext.Response.HasStarted)
-        {
-            httpContext.Response.StatusCode = 200;
-        }
-    }
-}).AllowAnonymous();
-
-// Simple test endpoint that bypasses bot framework auth
-app.MapPost("/api/bot-test", async (HttpContext httpContext, KnowledgeAgentService agentService, ILogger<Program> logger) =>
-{
-    logger.LogInformation("Bot-test endpoint called");
-    try
-    {
-        using var reader = new StreamReader(httpContext.Request.Body);
-        var body = await reader.ReadToEndAsync();
-        logger.LogInformation("Body: {Body}", body);
-        
-        // Try to parse as bot activity with case insensitive
-        var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-        var activity = System.Text.Json.JsonSerializer.Deserialize<Microsoft.Bot.Schema.Activity>(body, options);
-        if (activity?.Text != null)
-        {
-            logger.LogInformation("Message received: {Text}", activity.Text);
-            var response = await agentService.AskAsync(activity.Text);
-            return Results.Ok(new { received = activity.Text, botResponse = response.Answer, success = response.Success });
-        }
-        return Results.Ok(new { message = "No text in activity", rawBody = body.Substring(0, Math.Min(500, body.Length)) });
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Bot-test error");
-        return Results.Ok(new { error = ex.Message });
-    }
-}).AllowAnonymous();
-
-// Bot status endpoint for diagnostics
-app.MapGet("/api/bot-status", (IConfiguration config) =>
-{
-    return Results.Ok(new
-    {
-        Status = "Running",
-        AppId = config["Bot:MicrosoftAppId"] ?? "NOT SET",
-        AppType = config["Bot:MicrosoftAppType"] ?? "NOT SET",
-        TenantId = config["Bot:MicrosoftAppTenantId"] ?? "NOT SET",
-        HasPassword = !string.IsNullOrEmpty(config["Bot:MicrosoftAppPassword"])
     });
 }).AllowAnonymous();
 
