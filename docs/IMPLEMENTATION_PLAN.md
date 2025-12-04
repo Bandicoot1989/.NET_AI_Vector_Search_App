@@ -234,6 +234,72 @@ if (bestSearchScore < 0.65)
 
 ---
 
+## 5. Arquitectura de Datos - Principios Clave 📁
+
+> **Nota:** Estas recomendaciones definen cómo debe tratarse cada tipo de dato para maximizar eficiencia y minimizar costos.
+
+### A. Clasificación por Tipo de Dato
+
+| Archivo | Tipo de Dato | Estrategia de Búsqueda | ¿Usa IA? |
+|---------|--------------|------------------------|----------|
+| `SAP_Dictionary.xlsx` | Relacional/Estructurado | In-Memory Lookup O(1) | ❌ No |
+| `Centres.xlsx` | Key-Value | In-Memory Dictionary | ❌ No |
+| `Companies.xlsx` | Key-Value | In-Memory Dictionary | ❌ No |
+| `Sharepoint Apps.xlsx` | Descriptivo/Semántico | Búsqueda Híbrida (Vector + Keyword) | ✅ Sí |
+| `Context_Jira_Forms.xlsx` | Descriptivo/Semántico | Búsqueda Híbrida | ✅ Sí |
+
+**Principio:** No usar embeddings para datos estructurados (códigos SAP, centros). Solo usar IA para búsquedas donde el usuario describe una necesidad sin saber el nombre exacto.
+
+### B. Estado Actual de Implementación
+
+| Componente | Estado | Implementación |
+|------------|--------|----------------|
+| SAP In-Memory Lookup | ✅ Implementado | `SapLookupService` con diccionarios O(1) |
+| Mapas Inversos (Transaction→Roles) | ✅ Implementado | `_transactionsByRole`, `_rolesByPosition` |
+| Embeddings Pre-calculados | ✅ Implementado | `context-documents.json` en Blob Storage |
+| Búsqueda Híbrida | ✅ Implementado | `ContextSearchService` (keyword + cosine) |
+
+### C. Organización de Blob Storage (Recomendado)
+
+```
+agent-context/
+├── config-data/           # Datos estáticos - cargar en RAM (Singleton)
+│   ├── SAP_Dictionary.xlsx
+│   ├── centres.json
+│   └── companies.json
+│
+└── vector-data/           # Datos con embeddings - búsqueda semántica
+    ├── context-documents.json    # Apps + Jira + KB con vectores
+    └── confluence-articles.json
+```
+
+**Beneficio:** Separación clara reduce consumo de tokens (no envías tablas al LLM) y mejora precisión en datos técnicos.
+
+### D. Técnicas de "Entrenamiento" Manual del Bot
+
+#### 1. Enriquecimiento de Keywords (Context_Jira_Forms)
+Cuando el bot falle en encontrar un ticket:
+1. Identificar las palabras exactas que usó el usuario
+2. Agregar esas palabras a la columna `Keywords` del ticket correspondiente
+3. Regenerar el JSON con embeddings
+
+**Ejemplo:**
+```
+Usuario pregunta: "problema con el correo"
+Ticket no encontrado: "Email configuration issues"
+Solución: Agregar "correo, email, outlook, problema correo" a Keywords
+```
+
+#### 2. Concatenación de Campos para Vectores
+Para mejorar búsqueda de apps, el `search_text` debe incluir:
+```
+search_text = Name + " " + Description + " " + Keywords + " " + Owner
+```
+
+El Owner puede ayudar: "La app de Juan de HR" → encuentra la app del equipo de HR.
+
+---
+
 ## ✅ Decisiones Tomadas
 
 1. **Modelos:** Mantener `gpt-4o-mini` + `text-embedding-3-small`

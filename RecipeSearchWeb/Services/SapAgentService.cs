@@ -633,13 +633,31 @@ Si el usuario menciona problemas o necesita ayuda adicional, SIEMPRE sugiere abr
             _logger.LogInformation("Context search returned {Count} total results", contextResults.Count);
             
             // Filter to ONLY Jira servicedesk tickets that are SAP-related
+            // IMPORTANT: Exclude BPC tickets unless explicitly asking about BPC
+            var askingAboutBpc = questionLower.Contains("bpc") || 
+                                 questionLower.Contains("consolidation") ||
+                                 questionLower.Contains("consolidación");
+            
             var sapTickets = contextResults
                 .Where(d => !string.IsNullOrWhiteSpace(d.Link) && 
                            d.Link.Contains("atlassian.net/servicedesk"))
                 .Where(d => 
                 {
+                    var name = d.Name?.ToLowerInvariant() ?? "";
                     var text = $"{d.Name} {d.Description ?? ""} {d.Keywords ?? ""}".ToLowerInvariant();
-                    return text.Contains("sap");
+                    
+                    // Must contain SAP somewhere
+                    if (!text.Contains("sap"))
+                        return false;
+                    
+                    // EXCLUDE BPC tickets unless user is specifically asking about BPC
+                    if (!askingAboutBpc && (name.Contains("bpc") || name.Contains("consolidation")))
+                    {
+                        _logger.LogDebug("Excluding BPC ticket: {Name}", d.Name);
+                        return false;
+                    }
+                    
+                    return true;
                 })
                 .ToList();
             
@@ -688,10 +706,12 @@ Si el usuario menciona problemas o necesita ayuda adicional, SIEMPRE sugiere abr
             terms.AddRange(new[] { "access", "authorization", "acceso", "permiso" });
         }
         
+        // IMPORTANT: Prioritize Transaction ticket for transaction/problem queries
         if (questionLower.Contains("transac") || questionLower.Contains("t-code") ||
-            questionLower.Contains("problema") || questionLower.Contains("error"))
+            questionLower.Contains("problema") || questionLower.Contains("error") ||
+            questionLower.Contains("mm02") || questionLower.Contains("mm01"))
         {
-            terms.AddRange(new[] { "transaction", "help", "issue", "T-code" });
+            terms.AddRange(new[] { "Transaction", "help", "SAP Transaction" });
         }
         
         if (questionLower.Contains("reporte") || questionLower.Contains("report") ||
@@ -703,6 +723,12 @@ Si el usuario menciona problemas o necesita ayuda adicional, SIEMPRE sugiere abr
         if (questionLower.Contains("impresora") || questionLower.Contains("printer"))
         {
             terms.AddRange(new[] { "printer", "impresora" });
+        }
+        
+        if (questionLower.Contains("desbloq") || questionLower.Contains("unlock") ||
+            questionLower.Contains("bloqueado"))
+        {
+            terms.AddRange(new[] { "unlock", "user" });
         }
         
         return string.Join(" ", terms.Distinct());
@@ -734,7 +760,22 @@ Si el usuario menciona problemas o necesita ayuda adicional, SIEMPRE sugiere abr
     private double CalculateTicketScore(ContextDocument ticket, string questionLower)
     {
         var score = ticket.SearchScore; // Start with semantic search score
+        var ticketName = ticket.Name?.ToLowerInvariant() ?? "";
         var ticketText = $"{ticket.Name} {ticket.Description ?? ""} {ticket.Keywords ?? ""}".ToLowerInvariant();
+        
+        // === TRANSACTION PROBLEMS - Highest priority for transaction issues ===
+        if (questionLower.Contains("transac") || questionLower.Contains("t-code") ||
+            questionLower.Contains("mm02") || questionLower.Contains("mm01") ||
+            questionLower.Contains("problema") || questionLower.Contains("error") ||
+            questionLower.Contains("ayuda") || questionLower.Contains("help"))
+        {
+            // "I need help with SAP Transaction" is the correct ticket for transaction issues
+            if (ticketName.Contains("sap transaction") || ticketName.Contains("help with sap transaction"))
+            {
+                score += 1.0; // Strong boost for the exact match
+                _logger.LogDebug("Boosting 'SAP Transaction' ticket for transaction/problem query");
+            }
+        }
         
         // User creation intent
         if (questionLower.Contains("usuario") || questionLower.Contains("user") ||
@@ -753,18 +794,26 @@ Si el usuario menciona problemas o necesita ayuda adicional, SIEMPRE sugiere abr
                 score += 0.5;
         }
         
-        // Problem/help intent
-        if (questionLower.Contains("problema") || questionLower.Contains("error") ||
-            questionLower.Contains("ayuda") || questionLower.Contains("help"))
+        // Unlock user intent
+        if (questionLower.Contains("desbloq") || questionLower.Contains("unlock") ||
+            questionLower.Contains("bloqueado"))
         {
-            if (ticketText.Contains("help") || ticketText.Contains("issue") || ticketText.Contains("problem"))
-                score += 0.5;
+            if (ticketName.Contains("unlock"))
+                score += 0.8;
         }
         
-        // Transaction intent
-        if (questionLower.Contains("transac") || questionLower.Contains("t-code"))
+        // Printer intent
+        if (questionLower.Contains("impresora") || questionLower.Contains("printer"))
         {
-            if (ticketText.Contains("transaction") || ticketText.Contains("t-code"))
+            if (ticketName.Contains("printer"))
+                score += 0.8;
+        }
+        
+        // BI Reporting intent
+        if (questionLower.Contains("reporte") || questionLower.Contains("report") ||
+            questionLower.Contains("bi"))
+        {
+            if (ticketText.Contains("report") || ticketText.Contains("bi"))
                 score += 0.5;
         }
         
