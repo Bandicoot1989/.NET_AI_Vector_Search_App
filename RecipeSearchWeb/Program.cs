@@ -34,7 +34,8 @@ builder.Services.AddStorageServices();      // Azure Blob Storage services
 builder.Services.AddConfluenceServices();   // Confluence KB integration
 builder.Services.AddSearchServices();       // Vector search with embeddings
 builder.Services.AddCachingServices();      // Query caching (Tier 2 optimization)
-builder.Services.AddAgentServices();        // AI RAG Agent
+builder.Services.AddSapServices();          // SAP specialist agent (Tier 3 optimization)
+builder.Services.AddAgentServices();        // AI RAG Agent with routing
 builder.Services.AddAuthServices();         // Azure Easy Auth
 builder.Services.AddDocumentServices();     // Word/PDF processing
 
@@ -439,6 +440,26 @@ namespace RecipeSearchWeb.Extensions
             {
                 logger.LogInformation("ConfluenceKnowledgeService not configured - skipping initialization");
             }
+
+            // Initialize SAP Knowledge service IN BACKGROUND
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    logger.LogInformation("Starting SAP Knowledge initialization in background...");
+                    var sapKnowledgeService = serviceProvider.GetRequiredService<SapKnowledgeService>();
+                    await sapKnowledgeService.InitializeAsync();
+                    
+                    var stats = sapKnowledgeService.GetStatistics();
+                    logger.LogInformation("SapKnowledgeService initialized: {Positions} positions, {Roles} roles, {Trans} transactions, {Mappings} mappings",
+                        stats.TotalPositions, stats.TotalRoles, stats.TotalTransactions, stats.TotalMappings);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to initialize SapKnowledgeService - SAP queries may not work correctly");
+                }
+            });
+            logger.LogInformation("SAP Knowledge initialization started in background");
         }
     }
 }

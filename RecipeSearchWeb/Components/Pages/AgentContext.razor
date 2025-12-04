@@ -198,8 +198,8 @@
 
         try
         {
-            // Max 10MB
-            using var stream = selectedFile.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+            // Max 50MB for large SAP Excel files
+            using var stream = selectedFile.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024);
             using var memoryStream = new MemoryStream();
             await stream.CopyToAsync(memoryStream);
             memoryStream.Position = 0;

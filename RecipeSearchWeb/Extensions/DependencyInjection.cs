@@ -108,12 +108,29 @@ public static class DependencyInjection
     }
 
     /// <summary>
-    /// Add AI agent services
+    /// Add SAP specialist services (Tier 3 Optimization)
+    /// </summary>
+    public static IServiceCollection AddSapServices(this IServiceCollection services)
+    {
+        services.AddSingleton<SapKnowledgeService>();
+        services.AddSingleton<SapLookupService>();
+        services.AddSingleton<SapAgentService>();
+        
+        return services;
+    }
+
+    /// <summary>
+    /// Add AI agent services (including Tier 3 Agent Router)
     /// </summary>
     public static IServiceCollection AddAgentServices(this IServiceCollection services)
     {
+        // Register the base Knowledge Agent
         services.AddSingleton<KnowledgeAgentService>();
-        services.AddSingleton<IKnowledgeAgentService>(sp => sp.GetRequiredService<KnowledgeAgentService>());
+        
+        // Register the Agent Router as the primary IKnowledgeAgentService
+        // This routes queries to SAP Agent or General Agent based on content
+        services.AddSingleton<AgentRouterService>();
+        services.AddSingleton<IKnowledgeAgentService>(sp => sp.GetRequiredService<AgentRouterService>());
 
         return services;
     }
