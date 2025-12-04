@@ -181,21 +181,61 @@ RecipeSearchWeb/
   - Indicador de "pensando" mientras procesa
   - Histórico de conversación en sesión
 
+#### Arquitectura Multi-Agente (Tier 3)
+
+El Chat Bot utiliza un sistema de **agentes especializados** que enrutan las consultas según su dominio:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         AgentRouterService                               │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  1. ¿Es query de red/Zscaler?  ──yes──► NetworkAgentService             │
+│     • zscaler, vpn, remoto, red              • Documentación Zscaler    │
+│                                               • Tickets de red           │
+│                                                                          │
+│  2. ¿Es query de SAP?          ──yes──► SapAgentService                 │
+│     • transacción, rol, posición             • Lookups O(1) en memoria  │
+│     • códigos SAP (MM01, SY01...)            • SAP_Dictionary.xlsx      │
+│                                               • Tickets SAP              │
+│                                                                          │
+│  3. Default                    ──────► KnowledgeAgentService            │
+│                                               • KB Local                 │
+│                                               • Confluence               │
+│                                               • Context Documents        │
+│                                               • Tickets generales        │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
 #### Flujo RAG del Chat Bot
 ```
 1. Usuario hace pregunta
-2. KnowledgeAgentService expande query con sinónimos
-3. Búsqueda paralela en:
-   - Knowledge Base local (embeddings)
-   - Confluence KB (embeddings)
-   - Context Documents/Jira tickets (embeddings)
-4. BuildContext() prioriza:
-   - PRIMERO: Jira tickets (accionables)
-   - SEGUNDO: KB articles (procedimientos)
-   - TERCERO: Confluence pages (documentación)
-5. Azure OpenAI Chat genera respuesta contextual
-6. FormatMessage() renderiza markdown → HTML
+2. AgentRouterService detecta tipo de query
+3. Agente especializado procesa:
+   
+   NetworkAgent:
+   - Busca documentación Confluence sobre Zscaler/VPN
+   - Obtiene tickets de red desde Context_Jira_Forms.xlsx
+   - Genera respuesta con Azure OpenAI
+   
+   SapAgent:
+   - Detecta tipo de query SAP (transacción, rol, posición)
+   - SapLookupService hace búsqueda O(1) en memoria
+   - Obtiene tickets SAP desde Context_Jira_Forms.xlsx
+   - Genera respuesta tabular con Azure OpenAI
+   
+   KnowledgeAgent (General):
+   - Expande query con sinónimos
+   - Búsqueda paralela en KB, Confluence, Context
+   - Obtiene tickets desde Context_Jira_Forms.xlsx
+   - Genera respuesta con Azure OpenAI
+
+4. FormatMessage() renderiza markdown → HTML
 ```
+
+#### Principio de Tickets
+> **Todos los tickets sugeridos vienen de `Context_Jira_Forms.xlsx`**.
+> Los agentes NUNCA inventan URLs de tickets.
 
 ### 5. Agent Context (`/agentcontext`)
 
@@ -284,63 +324,107 @@ public class User
 
 ## Servicios
 
-### AzureAuthService
+### Servicios de Autenticación
+
+#### AzureAuthService
 Lee la identidad del usuario desde Azure Easy Auth headers:
 - `X-MS-CLIENT-PRINCIPAL-NAME`: Email del usuario
 - `X-MS-CLIENT-PRINCIPAL-ID`: ID único
 - Lista de admins configurable en `appsettings.json`
 
-### UserStateService
+#### UserStateService
 Servicio scoped que mantiene el estado del usuario durante la sesión interactiva.
 
-### CascadingUserState.razor
+#### CascadingUserState.razor
 Componente que:
 1. Lee usuario de HttpContext (render estático)
 2. Persiste con `PersistentComponentState`
 3. Restaura en modo interactivo
 4. Propaga vía `CascadingValue`
 
-### ScriptSearchService / KnowledgeSearchService
+### Servicios de Búsqueda
+
+#### ScriptSearchService / KnowledgeSearchService
 - Búsqueda semántica con embeddings de Azure OpenAI
 - Cálculo de similitud coseno
 - Ranking de resultados
 
-### KnowledgeAgentService (Chat Bot)
+#### ContextSearchService
+- Importación de Excel con categorías de tickets Jira
+- Campos: Name, Description, Keywords, Link (URL)
+- Búsqueda semántica para matching de problemas → tickets
+- **Fuente principal para URLs de tickets en todos los agentes**
+
+### Servicios de Agentes (Tier 3 Multi-Agent)
+
+#### AgentRouterService
+- **Implementa IKnowledgeAgentService** (inyectado en KnowledgeChat.razor)
+- Detecta tipo de query y enruta al agente apropiado
+- Orden de prioridad: Network → SAP → General
+
+#### KnowledgeAgentService (Agente General)
 - **RAG (Retrieval Augmented Generation)** para respuestas contextuales
 - Busca en múltiples fuentes: KB local, Confluence, Context Documents
 - Usa Azure OpenAI Chat (gpt-4o-mini) para generar respuestas
 - System prompt con instrucciones específicas para formato de links
 - Expansión de queries con sinónimos para mejor matching
+- Tickets desde Context_Jira_Forms.xlsx
 
-### ConfluenceKnowledgeService
+#### SapAgentService (Agente SAP)
+- Especializado en consultas SAP (transacciones, roles, posiciones)
+- Usa SapLookupService para búsquedas O(1) en memoria
+- Detecta tipos de query: TransactionInfo, RoleTransactions, PositionAccess, etc.
+- Prompt especializado para formato tabular
+- Tickets SAP desde Context_Jira_Forms.xlsx
+
+#### NetworkAgentService (Agente de Red)
+- Especializado en Zscaler, VPN, conectividad
+- Conocimiento embebido sobre trabajo remoto
+- Integración con documentación Confluence
+- Tickets de red desde Context_Jira_Forms.xlsx
+
+### Servicios SAP
+
+#### SapKnowledgeService
+- Carga SAP_Dictionary.xlsx desde Azure Blob Storage
+- Parsea 4 hojas: Dictionary_PL, Roles, Positions, BusinessRoles
+- Mantiene datos en memoria como singleton
+
+#### SapLookupService
+- Diccionarios indexados para búsquedas O(1)
+- Métodos: GetTransaction, GetTransactionsByRole, GetTransactionsByPosition
+- Búsqueda fuzzy cuando no hay match exacto
+
+### Servicios de Confluence
+
+#### ConfluenceKnowledgeService
 - Integración con Atlassian Confluence REST API
 - Autenticación con API Token (soporte Base64)
 - Cache de páginas en Azure Blob Storage
 - Búsqueda semántica con embeddings
 
-### ContextSearchService
-- Importación de Excel con categorías de tickets Jira
-- Campos: Name, Description, Keywords, Link (URL)
-- Búsqueda semántica para matching de problemas → tickets
+### Servicios de Documentos
 
-### StorageServices
-- CRUD contra Azure Blob Storage
-- Serialización JSON
-- Estructura: `{container}/{tipo}/{archivo}.json`
-
-### WordDocumentService
+#### WordDocumentService
 - Convierte `.docx` a `KnowledgeArticle`
 - Extrae metadata de tablas GA KB
 - Extrae contenido como Markdown
 - Extrae imágenes embebidas
 
-### PdfDocumentService
+#### PdfDocumentService
 - Convierte `.pdf` a `KnowledgeArticle`
 - Extracción de texto con PdfPig
 - Extracción automática de imágenes embebidas
 - Detección de formato por magic bytes
 
-### KnowledgeImageService
+### Servicios de Storage
+
+#### StorageServices
+- CRUD contra Azure Blob Storage
+- Serialización JSON
+- Estructura: `{container}/{tipo}/{archivo}.json`
+
+#### KnowledgeImageService
 - Upload de imágenes a Azure Blob
 - Ruta: `knowledge/images/{kbNumber}/{id}_{filename}`
 - Validación de tipos (JPEG, PNG, GIF, WebP, BMP)

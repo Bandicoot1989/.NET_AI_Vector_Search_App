@@ -143,7 +143,9 @@ public interface IAuthService
 builder.Services.AddStorageServices();     // Azure Blob Storage services
 builder.Services.AddConfluenceServices();  // Confluence KB integration
 builder.Services.AddSearchServices();      // Vector search with embeddings
-builder.Services.AddAgentServices();       // AI RAG Agent
+builder.Services.AddAgentServices();       // AI RAG Agent (General)
+builder.Services.AddSapServices();         // SAP Specialist Agent (Tier 3)
+builder.Services.AddNetworkServices();     // Network Specialist Agent (Tier 3)
 builder.Services.AddAuthServices();        // Azure Easy Auth
 builder.Services.AddDocumentServices();    // Word/PDF processing
 
@@ -158,9 +160,33 @@ await app.Services.InitializeServicesWithLoggingAsync(app.Logger);
 | `AddStorageServices()` | ScriptStorageService, KnowledgeStorageService, KnowledgeImageService, ContextStorageService |
 | `AddConfluenceServices()` | ConfluenceKnowledgeService |
 | `AddSearchServices()` | ScriptSearchService, KnowledgeSearchService, ContextSearchService |
-| `AddAgentServices()` | KnowledgeAgentService |
+| `AddAgentServices()` | KnowledgeAgentService, AgentRouterService (implements IKnowledgeAgentService) |
+| `AddSapServices()` | SapKnowledgeService, SapLookupService, SapAgentService |
+| `AddNetworkServices()` | NetworkAgentService |
 | `AddAuthServices()` | HttpContextAccessor, AzureAuthService, UserStateService |
 | `AddDocumentServices()` | WordDocumentService, PdfDocumentService, MarkdownRenderService |
+
+## Arquitectura Multi-Agente (Tier 3)
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           AgentRouterService                             │
+│                      (implements IKnowledgeAgentService)                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│   ┌───────────────────┐  ┌───────────────────┐  ┌───────────────────┐  │
+│   │ NetworkAgentService│  │  SapAgentService  │  │KnowledgeAgentService│ │
+│   │                    │  │                   │  │                    │  │
+│   │ • Zscaler/VPN      │  │ • SAP Lookups     │  │ • KB + Confluence  │  │
+│   │ • Conectividad     │  │ • Transacciones   │  │ • Context Docs     │  │
+│   │                    │  │ • Roles/Posiciones│  │ • General Queries  │  │
+│   └───────────────────┘  └───────────────────┘  └───────────────────┘  │
+│                                                                          │
+│   📋 Todos los tickets vienen de Context_Jira_Forms.xlsx                │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+Ver [TIER3_MULTI_AGENT_SYSTEM.md](./TIER3_MULTI_AGENT_SYSTEM.md) para documentación detallada.
 
 ## Clases Base de Dominio
 

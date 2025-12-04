@@ -1,0 +1,246 @@
+# Plan de Implementación - Mejoras del Sistema Multi-Agente
+
+**Fecha:** 4 de Diciembre 2025  
+**Estado:** En progreso  
+**Autor:** Análisis técnico externo + Evaluación interna
+
+---
+
+## 🎉 Cambios Implementados (4 Dic 2025)
+
+### ✅ Tickets Dinámicos desde Contexto
+**Estado: COMPLETADO**
+
+Se eliminaron TODOS los URLs hardcodeados de tickets. Ahora los agentes solo sugieren tickets que existen en `Context_Jira_Forms.xlsx`.
+
+#### SapAgentService
+- Eliminado el diccionario `SapTicketMap` con URLs hardcodeadas
+- Nueva función `GetSapTicketsAsync()` que busca SOLO en el contexto
+- Scoring inteligente basado en la intención del usuario (usuario, acceso, problema)
+- Si no encuentra ticket SAP en contexto → no sugiere ninguno
+
+#### NetworkAgentService  
+- Filtrado estricto: solo tickets con keywords de red (`zscaler`, `vpn`, `network`)
+- Exclusión explícita de tickets de otros sistemas (`sap`, `bpc`, `consolidation`)
+- Búsqueda de Confluence mejorada usando la pregunta del usuario
+- Muestra enlaces a documentación con formato `📖 [Ver documentacion completa](url)`
+
+---
+
+## 📊 Resumen Ejecutivo
+
+Basado en el análisis de la arquitectura actual (Tier 3 Multi-Agent, Clean Architecture, búsqueda híbrida), se han identificado mejoras para optimizar búsquedas y resultados sin incrementar costos significativamente.
+
+---
+
+## 🎯 Plan de Implementación por Prioridad
+
+| Prioridad | Recomendación | Esfuerzo | Impacto | Estado |
+|-----------|---------------|----------|---------|--------|
+| 🥇 **1** | Feedback Loop (threshold <0.65) | 2h | Alto | ⏳ Pendiente |
+| 🥈 **2** | Caché Semántica | 2 días | Muy Alto | ⏳ Pendiente |
+| 🥉 **3** | Re-Ranking RRF | 1 día | Alto | ⏳ Pendiente |
+| 4 | Router LLM (fallback) | 0.5 días | Alto | ⏳ Pendiente |
+| 5 | Smart Chunking | 2-3 días | Muy Alto | ⏳ Pendiente |
+| 6 | Auto-Sync Jira | 3-4 días | Medio | ⏸️ Backlog |
+
+---
+
+## 1. Optimización del Retrieval 🔍
+
+### A. Smart Chunking (Troceado Inteligente)
+
+**Problema Actual:**  
+El sistema almacena el contenido completo de artículos de Confluence en un solo campo para generar el embedding. Si un artículo es largo, el vector resultante es un "promedio" de todo el texto, diluyendo los detalles específicos.
+
+**Solución Propuesta:**
+- Dividir contenido en chunks de ~500 tokens con overlap de 100 tokens
+- Nuevo modelo: `ChunkId`, `ParentArticleId`, `Text`, `Vector`
+- Crear `ChunkingService` dedicado
+
+**Beneficio:**  
+Cuando el usuario pregunte por un detalle específico dentro de un manual largo, la búsqueda vectorial encontrará el párrafo exacto, no solo el documento general.
+
+**Esfuerzo:** 2-3 días  
+**Impacto:** ⭐⭐⭐⭐⭐ Muy Alto
+
+---
+
+### B. Re-Ranking con Reciprocal Rank Fusion (RRF)
+
+**Problema Actual:**  
+La similitud de coseno es rápida pero a veces trae resultados que "suenan" parecidos pero no son semánticamente relevantes.
+
+**Solución Propuesta:**
+```csharp
+// Recuperar más resultados (20 en lugar de 5)
+// Combinar rankings con RRF:
+double rrfScore = (1.0 / (60 + keywordRank)) + (1.0 / (60 + semanticRank));
+```
+
+**Implementación en:** `ContextSearchService.cs`
+
+**Esfuerzo:** 1 día  
+**Impacto:** ⭐⭐⭐⭐ Alto
+
+---
+
+## 2. Modelos y Costos 💰
+
+### Configuración Actual (MANTENER)
+- **Chat:** `gpt-4o-mini` ✅ Óptimo
+- **Embeddings:** `text-embedding-3-small` ✅ Suficiente
+
+### Mejora Opcional (Solo si hay problemas de diferenciación)
+- Cambiar a `text-embedding-3-large` con `dimensions: 1024`
+- Mejor calidad semántica, costo similar
+
+**Veredicto:** No cambiar por ahora. La combinación actual es la más eficiente en costo/beneficio.
+
+---
+
+## 3. Arquitectura de Agentes 🤖
+
+### A. Router Híbrido Semántico-Ligero
+
+**Problema Actual:**  
+El `AgentRouterService` usa Regex/Keywords para enrutar. Puede fallar con lenguaje natural ambiguo.
+
+**Ejemplo de fallo:**  
+"No puedo entrar a la herramienta de finanzas" → Es SAP, pero no dice "SAP"
+
+**Solución Propuesta:**
+```
+Paso 1 (Actual): Regex/Keywords (0 latencia)
+Paso 2 (Nuevo Fallback): Clasificación con LLM
+```
+
+```csharp
+// Si keywords no matchean:
+var prompt = @"Clasifica la siguiente consulta técnica en una categoría JSON: 
+{""category"": ""SAP"" | ""NETWORK"" | ""GENERAL""}. 
+Query: [UserQuery]";
+
+// Costo: ~$0.0001 por clasificación (10 tokens max)
+```
+
+**Esfuerzo:** 0.5 días  
+**Impacto:** ⭐⭐⭐⭐ Alto
+
+---
+
+### B. Caché Semántica (Mejora del Tier 2)
+
+**Problema Actual:**  
+La caché actual es por string exacto normalizado (lowercase, sin puntuación).
+
+**Solución Propuesta:**
+- Generar embedding de cada pregunta
+- Buscar en caché por similitud vectorial (>0.95)
+- Cache hit si preguntas son semánticamente iguales
+
+**Ejemplo:**
+- "¿Cómo configuro la VPN?"
+- "¿Pasos para poner la VPN?"
+- "Configuración VPN por favor"
+
+→ Todas darían cache hit
+
+```csharp
+// En lugar de: _cache[normalizedQuestion] = response
+var cachedEmbedding = await FindSimilarCachedQuestion(questionEmbedding, threshold: 0.95);
+if (cachedEmbedding != null) return cachedResponse;
+```
+
+**Esfuerzo:** 2 días  
+**Impacto:** ⭐⭐⭐⭐⭐ Muy Alto (reduce costos LLM)
+
+---
+
+## 4. Mejora de Datos 📊
+
+### A. Tickets Dinámicos (Auto-Sync Jira)
+
+**Estado:** ⏸️ **BACKLOG** - No prioritario
+
+**Propuesta Original:**
+- Azure Function ejecutándose cada 24h
+- Consulta API de Jira Service Management
+- Actualiza `Context_Jira_Forms.xlsx` automáticamente
+
+**Razón para postergar:**
+1. Los tipos de tickets no cambian frecuentemente
+2. Requiere configurar autenticación con Jira API
+3. El Excel actual funciona bien con mantenimiento mínimo
+
+**Alternativa simple:** Botón en panel admin para "Sincronizar Tickets" manualmente.
+
+---
+
+### B. Feedback Loop Negativo (Threshold de Confianza)
+
+**Problema:**  
+El bot puede "alucinar" si intenta responder sin información suficiente.
+
+**Solución:**
+```csharp
+if (bestSearchScore < 0.65)
+{
+    return "No encuentro información exacta sobre esto en mi base de conocimiento. " +
+           "¿Te gustaría abrir un ticket general de soporte para que un humano te ayude?";
+    // Mostrar FallbackTicketLink inmediatamente
+}
+```
+
+**Esfuerzo:** 2 horas  
+**Impacto:** ⭐⭐⭐⭐ Alto (previene alucinaciones)
+
+---
+
+## 📅 Roadmap Sugerido
+
+### Semana 1 (Inmediato)
+- [ ] Feedback Loop (threshold <0.65)
+- [ ] Re-Ranking RRF
+
+### Semana 2
+- [ ] Caché Semántica
+- [ ] Router LLM fallback
+
+### Semana 3-4
+- [ ] Smart Chunking (requiere re-indexar contenido)
+
+### Backlog
+- [ ] Auto-Sync Jira (cuando sea necesario)
+
+---
+
+## 📝 Notas Técnicas
+
+### Archivos a Modificar
+
+| Mejora | Archivos |
+|--------|----------|
+| Feedback Loop | `KnowledgeAgentService.cs` |
+| Re-Ranking RRF | `ContextSearchService.cs` |
+| Caché Semántica | `CacheService.cs` (nuevo), `KnowledgeAgentService.cs` |
+| Router LLM | `AgentRouterService.cs` |
+| Smart Chunking | `ConfluenceService.cs`, `KnowledgeArticle.cs`, nuevo `ChunkingService.cs` |
+
+### Dependencias Actuales (No cambiar)
+- Azure OpenAI: `gpt-4o-mini`, `text-embedding-3-small`
+- Azure Blob Storage: `agent-context` container
+- Confluence API: Para sincronización de KB
+
+---
+
+## ✅ Decisiones Tomadas
+
+1. **Modelos:** Mantener `gpt-4o-mini` + `text-embedding-3-small`
+2. **Auto-Sync Jira:** Postergar a backlog
+3. **Cross-Encoder:** No implementar (RRF es suficiente por ahora)
+
+---
+
+*Documento creado: 4 Diciembre 2025*  
+*Última actualización: 4 Diciembre 2025*

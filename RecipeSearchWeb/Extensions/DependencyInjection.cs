@@ -120,6 +120,16 @@ public static class DependencyInjection
     }
 
     /// <summary>
+    /// Add Network specialist services (Tier 3 Multi-Agent)
+    /// </summary>
+    public static IServiceCollection AddNetworkServices(this IServiceCollection services)
+    {
+        services.AddSingleton<NetworkAgentService>();
+        
+        return services;
+    }
+
+    /// <summary>
     /// Add AI agent services (including Tier 3 Agent Router)
     /// </summary>
     public static IServiceCollection AddAgentServices(this IServiceCollection services)
@@ -128,7 +138,7 @@ public static class DependencyInjection
         services.AddSingleton<KnowledgeAgentService>();
         
         // Register the Agent Router as the primary IKnowledgeAgentService
-        // This routes queries to SAP Agent or General Agent based on content
+        // This routes queries to SAP Agent, Network Agent, or General Agent based on content
         services.AddSingleton<AgentRouterService>();
         services.AddSingleton<IKnowledgeAgentService>(sp => sp.GetRequiredService<AgentRouterService>());
 

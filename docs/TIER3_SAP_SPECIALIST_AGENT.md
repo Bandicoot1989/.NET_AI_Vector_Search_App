@@ -414,13 +414,58 @@ Ayudas a los empleados con consultas sobre:
 
 ---
 
+## Resolución Dinámica de Tickets SAP
+
+### Principio Fundamental (Actualizado Diciembre 2025)
+
+> **Todos los tickets SAP deben venir de `Context_Jira_Forms.xlsx`**.
+> El agente SAP NO debe inventar URLs de tickets.
+
+### Implementación
+
+El método `GetSapTicketsAsync()` busca tickets en el contexto:
+
+```csharp
+private async Task<List<ContextDocument>> GetSapTicketsAsync(string question)
+{
+    var results = new List<ContextDocument>();
+    
+    // Buscar en Context_Jira_Forms.xlsx
+    await _contextService.InitializeAsync();
+    var searchTerms = "SAP solicitud acceso transaccion usuario request";
+    var contextResults = await _contextService.SearchAsync(searchTerms, topResults: 15);
+    
+    // Filtrar solo tickets de Jira ServiceDesk con contenido SAP
+    var sapTickets = contextResults
+        .Where(d => d.Link?.Contains("atlassian.net/servicedesk") == true)
+        .Where(d => ContainsSapTerms(d))
+        .ToList();
+    
+    // Solo usar fallback si NO hay nada en el contexto
+    if (!sapTickets.Any())
+    {
+        results.Add(FallbackTicket); // URL genérica del portal
+    }
+    
+    return results;
+}
+```
+
+### Archivo Context_Jira_Forms.xlsx
+
+| Name | Description | Keywords | Link |
+|------|-------------|----------|------|
+| SAP User Request | Solicitar accesos SAP | SAP, acceso, transaccion | https://antolin.atlassian.net/.../create/236 |
+
+---
+
 ## Continuación del Desarrollo
 
 Si pierdes el contexto de esta conversación, los pasos son:
 
 1. **Leer este documento** para entender la arquitectura
-2. **Verificar estado actual** del código en `Services/`
-3. **Continuar desde la fase** donde se quedó
+2. **Leer [TIER3_MULTI_AGENT_SYSTEM.md](./TIER3_MULTI_AGENT_SYSTEM.md)** para el sistema completo
+3. **Verificar estado actual** del código en `Services/`
 4. **El archivo Excel SAP** debe estar en Azure Blob Storage en el container `agent-context`
 
 ### Comandos Útiles
@@ -439,6 +484,14 @@ az webapp deploy --resource-group "rg-hq-helpdeskai-poc-001" --name "powershell-
 
 ---
 
-*Documentación generada: Diciembre 2025*
+## Documentación Relacionada
+
+- [TIER3_MULTI_AGENT_SYSTEM.md](./TIER3_MULTI_AGENT_SYSTEM.md) - Sistema Multi-Agente completo
+- [CLEAN_ARCHITECTURE.md](./CLEAN_ARCHITECTURE.md) - Arquitectura del proyecto
+- [PROJECT_DOCUMENTATION.md](./PROJECT_DOCUMENTATION.md) - Documentación general
+
+---
+
+*Documentación actualizada: Diciembre 2025*
 *Tier 3 - SAP Specialist Agent*
-*Versión: 1.0.0*
+*Versión: 2.0.0 - Tickets dinámicos desde contexto*

@@ -761,7 +761,74 @@ foreach (var kvp in linkPlaceholders)
 
 ---
 
-## 🆕 Cambios Recientes (Dic 3, 2025)
+## 🆕 Cambios Recientes (Dic 4, 2025)
+
+### Sistema Multi-Agente (Tier 3)
+
+#### Arquitectura
+El Chat Bot ahora utiliza un sistema de **agentes especializados**:
+
+```
+AgentRouterService (IKnowledgeAgentService)
+    │
+    ├── NetworkAgentService (Zscaler, VPN, Conectividad)
+    ├── SapAgentService (Transacciones, Roles, Posiciones)
+    └── KnowledgeAgentService (General - KB, Confluence, Context)
+```
+
+#### Nuevos Archivos
+| Archivo | Propósito |
+|---------|-----------|
+| `Services/NetworkAgentService.cs` | Agente especializado en red/Zscaler |
+| `docs/TIER3_MULTI_AGENT_SYSTEM.md` | Documentación del sistema multi-agente |
+
+#### Archivos Modificados
+| Archivo | Cambios |
+|---------|---------|
+| `Services/SapAgentService.cs` | Tickets dinámicos desde contexto |
+| `Services/AgentRouterService.cs` | Routing a 3 agentes (Network, SAP, General) |
+| `Services/KnowledgeAgentService.cs` | Eliminadas URLs hardcodeadas |
+| `Extensions/DependencyInjection.cs` | `AddNetworkServices()` |
+
+### Principio de Tickets Dinámicos
+
+> **CRÍTICO**: Todos los tickets sugeridos por CUALQUIER agente deben venir de `Context_Jira_Forms.xlsx`.
+
+**Antes (INCORRECTO)**:
+```csharp
+// URLs hardcodeadas - NO HACER
+private static readonly Dictionary<string, string> KnownTickets = new()
+{
+    ["sap"] = "https://antolin.atlassian.net/.../create/1984" // ❌ INCORRECTO
+};
+```
+
+**Ahora (CORRECTO)**:
+```csharp
+// Buscar en el contexto
+var contextResults = await _contextService.SearchAsync("SAP ticket", topResults: 15);
+var tickets = contextResults
+    .Where(d => d.Link?.Contains("atlassian.net/servicedesk") == true)
+    .ToList();
+
+// Solo usar fallback si NO hay nada en el contexto
+if (!tickets.Any())
+{
+    results.Add(new ContextDocument { Link = FallbackPortalUrl }); // URL genérica
+}
+```
+
+#### Estructura Context_Jira_Forms.xlsx
+| Columna | Descripción |
+|---------|-------------|
+| Name | Nombre del ticket |
+| Description | Descripción |
+| Keywords | Palabras clave para búsqueda |
+| Link | URL completa del ticket |
+
+---
+
+## 🆕 Cambios Anteriores (Dic 3, 2025)
 
 ### Confluence Multi-Space Sync
 - **Configuración**: `Confluence__SpaceKeys` acepta múltiples spaces separados por coma

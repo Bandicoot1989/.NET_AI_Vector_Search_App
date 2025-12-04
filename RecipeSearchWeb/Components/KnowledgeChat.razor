@@ -162,8 +162,11 @@
 
         try
         {
-            // Get AI response
-            var response = await AgentService.AskAsync(question);
+            // Build conversation history for context
+            var conversationHistory = BuildConversationHistory();
+            
+            // Get AI response with conversation context
+            var response = await AgentService.AskAsync(question, conversationHistory);
 
             // Add assistant message
             messages.Add(new ChatMessage
@@ -273,6 +276,33 @@
     public void Dispose()
     {
         // Cleanup if needed
+    }
+
+    /// <summary>
+    /// Build conversation history from local messages for AI context
+    /// </summary>
+    private List<OpenAI.Chat.ChatMessage>? BuildConversationHistory()
+    {
+        if (messages.Count == 0)
+            return null;
+            
+        // Take last 10 messages for context (5 exchanges) to avoid token limits
+        var recentMessages = messages.TakeLast(10).ToList();
+        
+        var history = new List<OpenAI.Chat.ChatMessage>();
+        foreach (var msg in recentMessages)
+        {
+            if (msg.IsUser)
+            {
+                history.Add(new OpenAI.Chat.UserChatMessage(msg.Text));
+            }
+            else
+            {
+                history.Add(new OpenAI.Chat.AssistantChatMessage(msg.Text));
+            }
+        }
+        
+        return history.Count > 0 ? history : null;
     }
 
     private class ChatMessage
