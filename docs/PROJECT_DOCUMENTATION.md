@@ -233,9 +233,15 @@ El Chat Bot utiliza un sistema de **agentes especializados** que enrutan las con
 4. FormatMessage() renderiza markdown → HTML
 ```
 
-#### Principio de Tickets
+#### Principio de Tickets (CRÍTICO)
 > **Todos los tickets sugeridos vienen de `Context_Jira_Forms.xlsx`**.
 > Los agentes NUNCA inventan URLs de tickets.
+> 
+> **Implementación (4 Dic 2025):**
+> - Eliminados TODOS los diccionarios hardcodeados de URLs
+> - `GetSapTicketsAsync()` y `GetNetworkTicketsAsync()` buscan SOLO en ContextService
+> - Scoring basado en intención del usuario para priorizar tickets correctos
+> - Exclusión de tickets de otros dominios para evitar sugerencias incorrectas
 
 ### 5. Agent Context (`/agentcontext`)
 
@@ -375,13 +381,18 @@ Componente que:
 - Usa SapLookupService para búsquedas O(1) en memoria
 - Detecta tipos de query: TransactionInfo, RoleTransactions, PositionAccess, etc.
 - Prompt especializado para formato tabular
-- Tickets SAP desde Context_Jira_Forms.xlsx
+- **Tickets SAP desde Context_Jira_Forms.xlsx ÚNICAMENTE**
+- Excluye tickets BPC/Consolidation a menos que se pregunte específicamente
+- Scoring inteligente: prioriza "SAP Transaction" para problemas de transacciones
 
 #### NetworkAgentService (Agente de Red)
-- Especializado en Zscaler, VPN, conectividad
+- Especializado en Zscaler, VPN, conectividad remota
 - Conocimiento embebido sobre trabajo remoto
-- Integración con documentación Confluence
-- Tickets de red desde Context_Jira_Forms.xlsx
+- Integración con documentación Confluence (búsqueda mejorada)
+- **Tickets de red desde Context_Jira_Forms.xlsx ÚNICAMENTE**
+- Filtrado estricto: solo tickets con keywords de red (`zscaler`, `vpn`, `network`)
+- Exclusión explícita de tickets de otros dominios (`sap`, `bpc`, `consolidation`)
+- Muestra enlaces a documentación: `📖 [Ver documentacion completa](url)`
 
 ### Servicios SAP
 

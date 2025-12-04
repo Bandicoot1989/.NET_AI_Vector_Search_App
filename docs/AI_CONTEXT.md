@@ -416,6 +416,87 @@ private async Task<List<KBImage>> ExtractAndUploadImagesAsync(PdfDocument docume
 
 ---
 
+### Error #11: Tickets SAP mostraban URL de BPC incorrectamente (4 Dic 2025)
+
+**Síntoma**: Al preguntar "Tengo problemas con la transacción MM02", el bot sugería el ticket de "BPC Consolidation" en lugar de "SAP Transaction".
+
+**Causa**: El ticket "BPC Consolidation" contenía "SAP" en sus keywords, y el scoring no excluía tickets de otros dominios.
+
+**Solución en `SapAgentService.cs`**:
+```csharp
+// 1. Excluir BPC a menos que se pregunte específicamente
+var askingAboutBpc = questionLower.Contains("bpc") || 
+                     questionLower.Contains("consolidation");
+
+var sapTickets = contextResults
+    .Where(d => /* ... */)
+    .Where(d => 
+    {
+        var name = d.Name?.ToLowerInvariant() ?? "";
+        // EXCLUDE BPC tickets unless user asks about BPC
+        if (!askingAboutBpc && (name.Contains("bpc") || name.Contains("consolidation")))
+            return false;
+        return true;
+    })
+    .ToList();
+
+// 2. Boost "SAP Transaction" ticket para queries de problemas
+if (questionLower.Contains("transac") || questionLower.Contains("problema"))
+{
+    if (ticketName.Contains("sap transaction"))
+        score += 1.0; // Strong boost
+}
+```
+
+---
+
+### Error #12: NetworkAgent sugería tickets de SAP/BPC (4 Dic 2025)
+
+**Síntoma**: Preguntas sobre Zscaler mostraban ticket de "BPC Consolidation".
+
+**Causa**: No había exclusión explícita de tickets de otros dominios.
+
+**Solución en `NetworkAgentService.cs`**:
+```csharp
+// Keywords de exclusión - NO son de red
+var excludeKeywords = new[] { "sap", "bpc", "consolidation", "transaction", "bi reporting" };
+
+var networkTickets = contextResults
+    .Where(d => d.Link.Contains("atlassian.net/servicedesk"))
+    .Where(d => 
+    {
+        var name = d.Name?.ToLowerInvariant() ?? "";
+        // MUST contain network keywords
+        var hasNetworkKeyword = networkKeywords.Any(k => text.Contains(k));
+        // MUST NOT contain excluded keywords
+        var hasExcludeKeyword = excludeKeywords.Any(k => name.Contains(k));
+        return hasNetworkKeyword && !hasExcludeKeyword;
+    })
+    .ToList();
+```
+
+---
+
+### Error #13: URLs de tickets inventadas/hardcodeadas (4 Dic 2025)
+
+**Síntoma**: Los agentes mostraban URLs como `/portal/1` o `/create/237` que no existían en el sistema Jira.
+
+**Causa**: Existían diccionarios hardcodeados con URLs inventadas:
+```csharp
+// INCORRECTO - URLs inventadas
+private static readonly Dictionary<string, string> SapTicketMap = new()
+{
+    ["usuario"] = "https://.../create/237", // No existía!
+};
+```
+
+**Solución**: Eliminar TODOS los diccionarios hardcodeados. Ahora SOLO se busca en `Context_Jira_Forms.xlsx` via `ContextService.SearchAsync()`.
+
+**Principio establecido**: 
+> Los agentes NUNCA inventan URLs. Todos los tickets vienen del archivo de contexto.
+
+---
+
 ## 📁 Archivos Clave
 
 ### Program.cs - Registro de Servicios
@@ -776,11 +857,51 @@ AgentRouterService (IKnowledgeAgentService)
     └── KnowledgeAgentService (General - KB, Confluence, Context)
 ```
 
+#### Principio Fundamental: Tickets Solo del Contexto
+> **CRÍTICO**: Todos los agentes buscan tickets ÚNICAMENTE en `Context_Jira_Forms.xlsx`.
+> Se eliminaron TODOS los diccionarios hardcodeados de URLs.
+
+**Implementación por agente:**
+- `SapAgentService.GetSapTicketsAsync()` → Busca en ContextService, excluye BPC si no aplica
+- `NetworkAgentService.GetNetworkTicketsAsync()` → Filtro estricto solo keywords de red
+- `KnowledgeAgentService.GetContextTicketsAsync()` → Búsqueda general en contexto
+
+#### Scoring de Tickets
+Cada agente implementa scoring basado en intención:
+```csharp
+// Ejemplo: SapAgentService
+if (questionLower.Contains("transac") || questionLower.Contains("problema"))
+    if (ticketName.Contains("sap transaction"))
+        score += 1.0; // Prioriza ticket correcto
+```
+
 #### Nuevos Archivos
 | Archivo | Propósito |
 |---------|-----------|
 | `Services/NetworkAgentService.cs` | Agente especializado en red/Zscaler |
 | `docs/TIER3_MULTI_AGENT_SYSTEM.md` | Documentación del sistema multi-agente |
+| `docs/IMPLEMENTATION_PLAN.md` | Plan de mejoras futuras con roadmap |
+
+---
+
+## 📋 Plan de Implementación Futuro
+
+Ver `docs/IMPLEMENTATION_PLAN.md` para el roadmap completo. Prioridades:
+
+| Prioridad | Mejora | Esfuerzo | Impacto |
+|-----------|--------|----------|---------|
+| 1 | Feedback Loop (threshold <0.65) | 2h | Alto |
+| 2 | Caché Semántica | 2 días | Muy Alto |
+| 3 | Re-Ranking RRF | 1 día | Alto |
+| 4 | Router LLM fallback | 0.5 días | Alto |
+| 5 | Smart Chunking | 2-3 días | Muy Alto |
+
+### Arquitectura de Datos Recomendada
+| Tipo de Dato | Estrategia | ¿Usa IA? |
+|--------------|------------|----------|
+| SAP Dictionary | In-Memory O(1) | ❌ |
+| Centres/Companies | Key-Value Dict | ❌ |
+| Jira Forms/Apps | Búsqueda Híbrida | ✅ |
 
 #### Archivos Modificados
 | Archivo | Cambios |
