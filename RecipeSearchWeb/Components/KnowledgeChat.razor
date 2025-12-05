@@ -4,7 +4,6 @@
 @inject IKnowledgeAgentService AgentService
 @inject FeedbackService FeedbackService
 @inject NavigationManager Navigation
-@inject AzureAuthService AuthService
 @implements IDisposable
 
 <div class="kb-chat-container @(isOpen ? "open" : "")">
@@ -145,6 +144,9 @@
 </div>
 
 @code {
+    [CascadingParameter(Name = "CurrentUser")]
+    private User? currentUser { get; set; }
+
     private bool isOpen = false;
     private bool isProcessing = false;
     private string currentMessage = string.Empty;
@@ -384,14 +386,13 @@
     }
 
     /// <summary>
-    /// Get user's initial from AuthService, same as NavMenu
+    /// Get user's initial from CascadingParameter, same approach as other pages
     /// </summary>
     private string GetUserInitial()
     {
-        var user = AuthService.GetCurrentUser();
-        if (user != null && !string.IsNullOrEmpty(user.FullName))
+        if (currentUser != null && !string.IsNullOrEmpty(currentUser.FullName))
         {
-            return user.FullName[0].ToString().ToUpper();
+            return currentUser.FullName[0].ToString().ToUpper();
         }
         return "U";
     }
