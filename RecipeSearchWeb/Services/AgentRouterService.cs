@@ -52,9 +52,9 @@ Reply with ONLY one word: SAP, NETWORK, or GENERAL";
     private static readonly HashSet<string> NetworkKeywords = new(StringComparer.OrdinalIgnoreCase)
     {
         "zscaler", "vpn", "remote", "remoto", "trabajo desde casa", "work from home",
-        "conectar", "conexion", "connect", "network", "red", "acceso remoto",
+        "conectar", "conecto", "conectarme", "conexion", "conexión", "connect", "network", "red", "acceso remoto",
         "internet", "wifi", "proxy", "firewall", "bloqueado", "blocked",
-        "zcc", "zscaler client"
+        "zcc", "zscaler client", "desde casa", "from home", "teletrabajo", "homeoffice"
     };
 
     // Common SAP transaction patterns
@@ -360,7 +360,10 @@ Reply with ONLY one word: SAP, NETWORK, or GENERAL";
         // Check for work-from-home / remote work patterns
         var remotePatterns = new[] {
             "trabajar desde casa", "work from home", "acceso desde casa",
-            "conectarme desde", "no me conecta", "no puedo acceder"
+            "conectarme desde", "no me conecta", "no puedo acceder",
+            "conecto desde casa", "conectar desde casa", "acceder desde casa",
+            "entrar desde casa", "acceso a antolin", "conectar a antolin",
+            "conectarme a antolin", "conecto a antolin", "acceder a antolin"
         };
         
         if (remotePatterns.Any(p => lowerQuestion.Contains(p)))
