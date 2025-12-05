@@ -4,6 +4,7 @@
 @inject IKnowledgeAgentService AgentService
 @inject FeedbackService FeedbackService
 @inject NavigationManager Navigation
+@inject UserStateService UserState
 @implements IDisposable
 
 <div class="kb-chat-container @(isOpen ? "open" : "")">
@@ -58,7 +59,7 @@
                         <div class="message-avatar">
                             @if (msg.IsUser)
                             {
-                                <span>👤</span>
+                                <span>@GetUserInitial()</span>
                             }
                             else
                             {
@@ -381,6 +382,19 @@
         public double BestSearchScore { get; set; }
         public bool WasLowConfidence { get; set; }
     }
+
+    /// <summary>
+    /// Get user's initial from UserStateService, same as NavMenu
+    /// </summary>
+    private string GetUserInitial()
+    {
+        var user = UserState.CurrentUser;
+        if (user != null && !string.IsNullOrEmpty(user.FullName))
+        {
+            return user.FullName.Substring(0, 1).ToUpper();
+        }
+        return "U";
+    }
 }
 
 <style>
@@ -662,12 +676,13 @@
 .message.assistant .message-avatar {
     background: #1E1F21;
     border-color: #00C897;
-    padding: 4px;
+    padding: 0;
+    overflow: hidden;
 }
 
 .avatar-icon-img {
-    width: 100%;
-    height: 100%;
+    width: 20px;
+    height: 20px;
     object-fit: contain;
 }
 
