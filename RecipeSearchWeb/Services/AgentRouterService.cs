@@ -155,6 +155,7 @@ Reply with ONLY one word: SAP, NETWORK, or GENERAL";
     
     /// <summary>
     /// Get SAP-specific context (transactions, roles, positions lookup)
+    /// Enhanced to include related data (position → roles → transactions)
     /// </summary>
     private async Task<string?> GetSapSpecialistContextAsync(string question)
     {
@@ -167,31 +168,98 @@ Reply with ONLY one word: SAP, NETWORK, or GENERAL";
             var words = question.Split(new[] { ' ', ',', '?', '!', '.', ':', ';', '"', '\'', '(', ')' }, 
                 StringSplitOptions.RemoveEmptyEntries);
             
+            var foundPositions = new List<string>();
+            var foundRoles = new List<string>();
+            
             foreach (var word in words)
             {
                 var clean = word.Trim().ToUpperInvariant();
                 if (clean.Length < 2 || clean.Length > 10) continue;
                 
+                // Check for transaction
                 var transaction = _sapLookup.GetTransaction(clean);
                 if (transaction != null)
                 {
-                    sb.AppendLine($"SAP Transaction {clean}: {transaction.Description}");
+                    sb.AppendLine($"### SAP Transaction: {clean}");
+                    sb.AppendLine($"- Description: {transaction.Description}");
+                    if (!string.IsNullOrEmpty(transaction.RoleId))
+                        sb.AppendLine($"- Associated Role: {transaction.RoleId}");
+                    sb.AppendLine();
                 }
                 
+                // Check for role
                 var role = _sapLookup.GetRole(clean);
                 if (role != null)
                 {
-                    sb.AppendLine($"SAP Role {clean}: {role.Description}");
+                    foundRoles.Add(clean);
+                    sb.AppendLine($"### SAP Role: {clean}");
+                    sb.AppendLine($"- Description: {role.Description}");
+                    sb.AppendLine();
                 }
                 
+                // Check for position
                 var position = _sapLookup.GetPosition(clean);
                 if (position != null)
                 {
-                    sb.AppendLine($"SAP Position {clean}: {position.Name}");
+                    foundPositions.Add(clean);
+                    sb.AppendLine($"### SAP Position: {clean}");
+                    sb.AppendLine($"- Name: {position.Name}");
+                    sb.AppendLine();
                 }
             }
             
-            return sb.Length > 0 ? sb.ToString() : null;
+            // For each found position, get associated roles and transactions
+            foreach (var positionId in foundPositions)
+            {
+                // Get roles for this position
+                var positionRoles = _sapLookup.GetRolesForPosition(positionId);
+                if (positionRoles.Any())
+                {
+                    sb.AppendLine($"### Roles assigned to position {positionId}:");
+                    foreach (var roleId in positionRoles.Take(20))
+                    {
+                        var roleInfo = _sapLookup.GetRole(roleId);
+                        sb.AppendLine($"- {roleId}: {roleInfo?.Description ?? ""}");
+                    }
+                    sb.AppendLine();
+                }
+                
+                // Get transactions for this position
+                var positionTransactions = _sapLookup.GetTransactionsByPosition(positionId);
+                if (positionTransactions.Any())
+                {
+                    sb.AppendLine($"### Transactions available for position {positionId}:");
+                    foreach (var trans in positionTransactions.Take(30))
+                    {
+                        sb.AppendLine($"- {trans.Code}: {trans.Description}");
+                    }
+                    sb.AppendLine();
+                }
+            }
+            
+            // For each found role, get associated transactions
+            foreach (var roleId in foundRoles)
+            {
+                var roleTransactions = _sapLookup.GetTransactionsByRole(roleId);
+                if (roleTransactions.Any())
+                {
+                    sb.AppendLine($"### Transactions in role {roleId}:");
+                    foreach (var trans in roleTransactions.Take(20))
+                    {
+                        sb.AppendLine($"- {trans.Code}: {trans.Description}");
+                    }
+                    sb.AppendLine();
+                }
+            }
+            
+            var result = sb.ToString();
+            if (!string.IsNullOrEmpty(result))
+            {
+                _logger.LogInformation("SAP Context found: {Length} chars, Positions: {Pos}, Roles: {Roles}", 
+                    result.Length, foundPositions.Count, foundRoles.Count);
+            }
+            
+            return result.Length > 0 ? result : null;
         }
         catch (Exception ex)
         {
