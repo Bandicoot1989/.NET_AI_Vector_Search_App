@@ -107,6 +107,7 @@ Te recomiendo abrir un ticket en el portal de soporte para que el equipo de IT p
 - If not → direct to SAP support ticket";
 
     private readonly QueryCacheService? _cacheService;
+    private readonly FeedbackService? _feedbackService;
 
     // Confidence threshold for feedback loop - if best score is below this, suggest opening a ticket
     private const double ConfidenceThreshold = 0.65;
@@ -120,6 +121,7 @@ Te recomiendo abrir un ticket en el portal de soporte para que el equipo de IT p
         ContextSearchService contextService,
         ConfluenceKnowledgeService? confluenceService,
         QueryCacheService? cacheService,
+        FeedbackService? feedbackService,
         ILogger<KnowledgeAgentService> logger)
     {
         // IMPORTANT: GPT_NAME is for embeddings, CHAT_NAME is for chat completions
@@ -134,10 +136,12 @@ Te recomiendo abrir un ticket en el portal de soporte para que el equipo de IT p
         _contextService = contextService;
         _confluenceService = confluenceService;
         _cacheService = cacheService;
+        _feedbackService = feedbackService;
         
-        _logger.LogInformation("Confluence service: {Status}, Cache service: {CacheStatus}", 
+        _logger.LogInformation("Confluence service: {Status}, Cache service: {CacheStatus}, Feedback service: {FeedbackStatus}", 
             confluenceService?.IsConfigured == true ? "Configured" : "Not configured",
-            cacheService != null ? "Enabled" : "Disabled");
+            cacheService != null ? "Enabled" : "Disabled",
+            feedbackService != null ? "Enabled" : "Disabled");
     }
 
     #region Query Analysis (Tier 1 Optimizations)
@@ -336,6 +340,117 @@ Te recomiendo abrir un ticket en el portal de soporte para que el equipo de IT p
     
     #endregion
 
+    #region Auto-Learning: Few-Shot Prompting
+    
+    /// <summary>
+    /// Get few-shot examples from successful responses cache (Level 3 Auto-Learning)
+    /// This teaches the AI how to respond based on previously successful Q&A pairs
+    /// </summary>
+    private async Task<string> GetFewShotExamplesAsync(string query)
+    {
+        if (_feedbackService == null)
+            return string.Empty;
+        
+        try
+        {
+            // Try to find a semantically similar successful response
+            var cachedResponse = await _feedbackService.GetCachedResponseAsync(query);
+            
+            if (cachedResponse != null)
+            {
+                _logger.LogInformation("Few-Shot: Found cached successful response for similar query (UseCount: {Count})", 
+                    cachedResponse.UseCount);
+                
+                // Format as a few-shot example to guide the AI
+                return $@"
+
+## EJEMPLO DE RESPUESTA EXITOSA (usa este estilo y formato):
+**Pregunta anterior similar:** {cachedResponse.Query}
+**Respuesta que fue útil (👍):** {cachedResponse.Response}
+---
+Usa el ejemplo anterior como guía para el tono, formato y nivel de detalle.";
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error getting few-shot examples from FeedbackService");
+        }
+        
+        return string.Empty;
+    }
+    
+    /// <summary>
+    /// Apply feedback boost to search results (Level 1 Auto-Learning)
+    /// Documents that received positive feedback for similar queries get a score boost
+    /// </summary>
+    private async Task ApplyFeedbackBoostAsync(string query, List<ContextDocument> results)
+    {
+        if (_feedbackService == null || !results.Any())
+            return;
+        
+        try
+        {
+            // Get feedback stats to identify documents that worked well
+            var stats = await _feedbackService.GetStatsAsync();
+            
+            // Get all positive feedback to build a boost map
+            var allFeedback = await _feedbackService.GetAllFeedbackAsync();
+            var positiveFeedback = allFeedback.Where(f => f.IsHelpful).ToList();
+            
+            if (!positiveFeedback.Any())
+                return;
+            
+            // Extract keywords from current query
+            var queryKeywords = query.ToLowerInvariant()
+                .Split(new[] { ' ', '?', '!', '.', ',' }, StringSplitOptions.RemoveEmptyEntries)
+                .Where(w => w.Length >= 3)
+                .ToHashSet();
+            
+            // Find feedback entries with similar keywords
+            var relevantFeedback = positiveFeedback
+                .Where(f => f.ExtractedKeywords.Any(k => queryKeywords.Contains(k.ToLowerInvariant())))
+                .ToList();
+            
+            if (!relevantFeedback.Any())
+                return;
+            
+            // Apply boost to matching documents
+            var boostedCount = 0;
+            foreach (var result in results)
+            {
+                // Check if this document's content matches keywords from successful responses
+                var docText = $"{result.Name} {result.Description} {result.Keywords}".ToLowerInvariant();
+                
+                foreach (var feedback in relevantFeedback)
+                {
+                    var matchScore = feedback.ExtractedKeywords
+                        .Count(k => docText.Contains(k.ToLowerInvariant()));
+                    
+                    if (matchScore >= 2) // At least 2 keyword matches
+                    {
+                        // Apply 15% boost per matching feedback entry (max 45% boost)
+                        var boostFactor = Math.Min(1.45, 1.0 + (matchScore * 0.15));
+                        result.SearchScore *= boostFactor;
+                        boostedCount++;
+                        break; // Only apply one boost per document
+                    }
+                }
+            }
+            
+            if (boostedCount > 0)
+            {
+                _logger.LogInformation("Feedback Boost: Applied boost to {Count} documents based on {FeedbackCount} positive feedback entries",
+                    boostedCount, relevantFeedback.Count);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error applying feedback boost");
+        }
+    }
+    
+    #endregion
+
     /// <summary>
     /// Process a user question and return an AI-generated answer
     /// Uses Tier 1 optimizations: Intent Detection, Weighted Search, Query Decomposition
@@ -417,6 +532,10 @@ Te recomiendo abrir un ticket en el portal de soporte para que el equipo de IT p
             _logger.LogInformation("Parallel search completed in {Ms}ms (KB:{KbCount}, Context:{CtxCount}, Confluence:{ConfCount})",
                 searchStopwatch.ElapsedMilliseconds, relevantArticles.Count, allContextResults.Count, confluencePages.Count);
             
+            // === AUTO-LEARNING: Apply Feedback Boost (Level 1) ===
+            // Boost scores for documents that received positive feedback for similar queries
+            await ApplyFeedbackBoostAsync(question, allContextResults);
+            
             // === FEEDBACK LOOP: Check Confidence Threshold ===
             // Calculate best score from all sources
             var bestKbScore = relevantArticles.Any() ? relevantArticles.Max(a => a.SearchScore) : 0.0;
@@ -475,10 +594,13 @@ Te recomiendo abrir un ticket en el portal de soporte para que el equipo de IT p
             // 4. Build context from all sources (weights are already applied)
             var context = BuildContextWeighted(relevantArticles, contextDocs, confluencePages, weights);
             
+            // === AUTO-LEARNING: Few-Shot Prompting from Successful Responses ===
+            var fewShotExamples = await GetFewShotExamplesAsync(question);
+            
             // 5. Build the messages for the chat
             var messages = new List<ChatMessage>
             {
-                new SystemChatMessage(SystemPrompt)
+                new SystemChatMessage(SystemPrompt + fewShotExamples)
             };
 
             // Add conversation history if provided (for multi-turn)
@@ -512,8 +634,8 @@ Please answer based on the context provided above. If there's a relevant ticket 
             var answer = response.Value.Content[0].Text;
             
             stopwatch.Stop();
-            _logger.LogInformation("Agent answered question: Intent={Intent}, {ArticleCount} KB articles, {ConfluenceCount} Confluence pages, TotalTime={Ms}ms", 
-                intent, relevantArticles.Count, confluencePages.Count, stopwatch.ElapsedMilliseconds);
+            _logger.LogInformation("Agent answered question: Intent={Intent}, {ArticleCount} KB articles, {ConfluenceCount} Confluence pages, FewShot={HasFewShot}, TotalTime={Ms}ms", 
+                intent, relevantArticles.Count, confluencePages.Count, !string.IsNullOrEmpty(fewShotExamples), stopwatch.ElapsedMilliseconds);
 
             // Only return articles with high relevance scores as sources
             var highRelevanceArticles = relevantArticles
