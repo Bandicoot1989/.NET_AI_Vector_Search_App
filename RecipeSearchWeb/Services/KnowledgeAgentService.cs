@@ -569,6 +569,233 @@ Please answer based on the context provided above. If there's a relevant ticket 
             };
         }
     }
+
+    /// <summary>
+    /// Ask with specialist context - uses full search capabilities + specialist knowledge
+    /// This is the NEW unified approach: General search + Specialist prompts
+    /// </summary>
+    public async Task<AgentResponse> AskWithSpecialistAsync(string question, SpecialistType specialist, string? specialistContext = null, List<ChatMessage>? conversationHistory = null)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        
+        try
+        {
+            _logger.LogInformation("AskWithSpecialist: Specialist={Specialist}, Question='{Question}'", 
+                specialist, question.Length > 50 ? question.Substring(0, 50) + "..." : question);
+
+            // === FULL SEARCH: Same as General Agent ===
+            var intent = DetectIntent(question);
+            var weights = GetSearchWeights(intent);
+            var subQueries = DecomposeQuery(question);
+            var expandedQuery = ExpandQueryWithSynonyms(question);
+            
+            // Add specialist-specific query expansions
+            expandedQuery = specialist switch
+            {
+                SpecialistType.Network => expandedQuery + " Zscaler VPN remote access conectividad red",
+                SpecialistType.SAP => expandedQuery + " SAP transaccion role autorization fiori",
+                _ => expandedQuery
+            };
+            
+            _logger.LogInformation("Specialist search: Intent={Intent}, ExpandedQuery={Query}", intent, expandedQuery);
+            
+            // Start all searches in parallel
+            var kbSearchTask = _knowledgeService.SearchArticlesAsync(question, topResults: 5);
+            var contextSearchTask = SearchContextParallelAsync(subQueries, expandedQuery);
+            var confluenceSearchTask = SearchConfluenceParallelAsync(question, expandedQuery, intent, weights);
+            
+            await Task.WhenAll(kbSearchTask, contextSearchTask, confluenceSearchTask);
+            
+            var relevantArticles = await kbSearchTask;
+            var allContextResults = await contextSearchTask;
+            var confluencePages = await confluenceSearchTask;
+            
+            _logger.LogInformation("Specialist search results: KB={Kb}, Context={Ctx}, Confluence={Conf}",
+                relevantArticles.Count, allContextResults.Count, confluencePages.Count);
+            
+            // Apply weights and build context
+            var contextDocs = allContextResults
+                .GroupBy(d => d.Id)
+                .Select(g => g.First())
+                .Select(d => {
+                    if (!string.IsNullOrWhiteSpace(d.Link) && d.Link.Contains("atlassian.net/servicedesk"))
+                        d.SearchScore *= weights.JiraTicketWeight;
+                    else
+                        d.SearchScore *= weights.ReferenceDataWeight;
+                    return d;
+                })
+                .OrderByDescending(d => d.SearchScore)
+                .Take(15)
+                .ToList();
+            
+            var context = BuildContextWeighted(relevantArticles, contextDocs, confluencePages, weights);
+            
+            // === BUILD SPECIALIST SYSTEM PROMPT ===
+            var systemPrompt = GetSpecialistSystemPrompt(specialist);
+            
+            // Add specialist-specific context if provided (e.g., SAP lookup results)
+            if (!string.IsNullOrEmpty(specialistContext))
+            {
+                context = $"=== SPECIALIST DATA ({specialist}) ===\n{specialistContext}\n\n{context}";
+            }
+            
+            // Build messages
+            var messages = new List<ChatMessage>
+            {
+                new SystemChatMessage(systemPrompt)
+            };
+            
+            if (conversationHistory?.Any() == true)
+            {
+                messages.AddRange(conversationHistory);
+            }
+            
+            var intentHint = intent switch
+            {
+                QueryIntent.TicketRequest => "El usuario quiere abrir un ticket de soporte. Prioriza mostrar el enlace al ticket específico.",
+                QueryIntent.HowTo => "El usuario quiere instrucciones paso a paso. Proporciona procedimientos detallados de la documentación.",
+                QueryIntent.Lookup => "El usuario quiere buscar información específica. Proporciona los datos exactos solicitados.",
+                QueryIntent.Troubleshooting => "El usuario tiene un problema. Proporciona soluciones y enlaces a tickets si es necesario.",
+                _ => ""
+            };
+            
+            var userMessage = $@"Context from Knowledge Base, Confluence KB, and Reference Data:
+{context}
+
+{(string.IsNullOrEmpty(intentHint) ? "" : $"INTENT HINT: {intentHint}\n")}
+User Question: {question}
+
+Please answer based on the context provided above. If there's relevant documentation or a ticket URL, include it in your response.";
+
+            messages.Add(new UserChatMessage(userMessage));
+            
+            // Get AI response
+            var response = await _chatClient.CompleteChatAsync(messages);
+            var answer = response.Value.Content[0].Text;
+            
+            stopwatch.Stop();
+            _logger.LogInformation("Specialist Agent answered: Type={Specialist}, Intent={Intent}, Time={Ms}ms", 
+                specialist, intent, stopwatch.ElapsedMilliseconds);
+            
+            return new AgentResponse
+            {
+                Answer = answer,
+                RelevantArticles = relevantArticles
+                    .Where(a => a.SearchScore >= 0.5)
+                    .Take(3)
+                    .Select(a => new ArticleReference
+                    {
+                        KBNumber = a.KBNumber,
+                        Title = a.Title,
+                        Score = (float)a.SearchScore
+                    }).ToList(),
+                ConfluenceSources = confluencePages
+                    .Where(p => !string.IsNullOrEmpty(p.Content) && p.Content.Length > 100)
+                    .Take(3)
+                    .Select(p => new ConfluenceReference
+                    {
+                        Title = p.Title,
+                        SpaceKey = p.SpaceKey,
+                        WebUrl = p.WebUrl
+                    }).ToList(),
+                Success = true,
+                AgentType = specialist.ToString()
+            };
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            _logger.LogError(ex, "Error in Specialist Agent ({Specialist}): {Question}", specialist, question);
+            return new AgentResponse
+            {
+                Answer = "Lo siento, ocurrió un error al procesar tu consulta. Por favor, intenta de nuevo.",
+                Success = false,
+                Error = ex.Message
+            };
+        }
+    }
+    
+    /// <summary>
+    /// Get the system prompt for each specialist type
+    /// </summary>
+    private string GetSpecialistSystemPrompt(SpecialistType specialist)
+    {
+        return specialist switch
+        {
+            SpecialistType.Network => NetworkSpecialistPrompt,
+            SpecialistType.SAP => SapSpecialistPrompt,
+            _ => SystemPrompt
+        };
+    }
+    
+    // Network Specialist System Prompt
+    private const string NetworkSpecialistPrompt = @"Eres el **Experto en Redes y Acceso Remoto** del equipo de IT Operations de Grupo Antolin.
+
+## Tu Rol
+Ayudas a los empleados con consultas sobre conectividad, acceso remoto y trabajo desde casa.
+
+## Conocimiento Principal: Zscaler
+Zscaler es la solución de acceso remoto de Grupo Antolin que permite:
+- Acceder a aplicaciones corporativas (SAP, Teamcenter, etc.)
+- Navegar de forma segura por internet
+- Conectarse a recursos internos desde cualquier ubicación
+
+### Requisitos para usar Zscaler:
+1. Tener instalado el cliente Zscaler (ZCC - Zscaler Client Connector)
+2. Iniciar sesión con credenciales corporativas
+3. Mantener el cliente activo durante el trabajo
+
+## REGLAS CRÍTICAS
+
+### 1. USA LA DOCUMENTACIÓN
+- SIEMPRE revisa primero la documentación de Confluence proporcionada
+- Si hay guías paso a paso, úsalas para responder
+- Incluye el enlace a la documentación: '📖 Más información: [Título](URL)'
+
+### 2. PROPORCIONA TICKETS CUANDO SEA NECESARIO
+- Si el usuario tiene un problema que no puede resolver solo, proporciona el ticket
+- Formato: '[Abrir ticket de soporte](URL)'
+
+### 3. NO INVENTES
+- Si no hay información disponible, di: 'No tengo documentación específica sobre este tema'
+- Proporciona el ticket de soporte general
+
+## Idioma
+Responde en el mismo idioma que el usuario (español o inglés).";
+
+    // SAP Specialist System Prompt  
+    private const string SapSpecialistPrompt = @"Eres el **Experto en SAP** del equipo de IT Operations de Grupo Antolin.
+
+## Tu Rol
+Ayudas a los empleados con consultas sobre SAP, incluyendo:
+- Transacciones SAP (T-codes)
+- Roles y autorizaciones
+- Posiciones organizativas
+- Problemas de acceso a SAP GUI o Fiori
+- Procedimientos SAP
+
+## REGLAS CRÍTICAS
+
+### 1. USA LA DOCUMENTACIÓN
+- SIEMPRE revisa primero la documentación de Confluence proporcionada
+- Si hay guías paso a paso o procedimientos SAP, úsalos para responder
+- Incluye el enlace a la documentación: '📖 Más información: [Título](URL)'
+
+### 2. DATOS DE SAP
+- Si se proporcionan datos de SAP (transacciones, roles, posiciones), úsalos en tu respuesta
+- Explica qué hace cada transacción o rol si es relevante
+
+### 3. PROPORCIONA TICKETS CUANDO SEA NECESARIO
+- Para problemas de acceso o autorización → Ticket de autorización SAP
+- Para problemas técnicos → Ticket de soporte SAP
+- Formato: '[Abrir ticket](URL)'
+
+### 4. NO INVENTES
+- Si no hay información disponible, di: 'No tengo documentación específica sobre este tema'
+- Proporciona el ticket de soporte correspondiente
+
+## Idioma
+Responde en el mismo idioma que el usuario (español o inglés).";
     
     #region Tier 2: Parallel Search Helpers
     

@@ -2,6 +2,7 @@ using Azure.AI.OpenAI;
 using OpenAI.Chat;
 using RecipeSearchWeb.Interfaces;
 using RecipeSearchWeb.Models;
+using System.Text;
 
 namespace RecipeSearchWeb.Services;
 
@@ -103,13 +104,15 @@ Reply with ONLY one word: SAP, NETWORK, or GENERAL";
     }
 
     /// <summary>
-    /// Route query to appropriate agent
+    /// Route query to appropriate agent - NEW UNIFIED APPROACH
+    /// All queries use KnowledgeAgentService's full search capabilities
+    /// Specialist agents add specific prompts and data, not replace search
     /// </summary>
     public async Task<AgentResponse> AskAsync(string question, List<ChatMessage>? conversationHistory = null)
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         
-        // Determine which agent to use - include conversation history for context-aware routing
+        // Determine specialist type (for prompts and extra context)
         var agentType = await DetermineAgentAsync(question, conversationHistory);
         
         _logger.LogInformation("Query routing: Agent={Agent}, Question='{Question}'", 
@@ -117,46 +120,92 @@ Reply with ONLY one word: SAP, NETWORK, or GENERAL";
 
         AgentResponse response;
         
-        switch (agentType)
+        // Map internal AgentType to interface SpecialistType
+        var specialistType = agentType switch
         {
-            case AgentType.SAP:
-                response = await _sapAgent.AskSapAsync(question, conversationHistory);
-                response.AgentType = "SAP";
-                
-                // If SAP agent didn't find data or failed, fallback to general agent
-                if (!response.Success || response.Answer.Contains("no esta disponible") || 
-                    response.Answer.Contains("no encuentro informacion"))
-                {
-                    _logger.LogInformation("SAP Agent had no data, falling back to General Agent");
-                    response = await _generalAgent.AskAsync(question, conversationHistory);
-                    response.AgentType = "General (SAP fallback)";
-                }
-                break;
-                
-            case AgentType.Network:
-                response = await _networkAgent.AskNetworkAsync(question, conversationHistory);
-                response.AgentType = "Network";
-                
-                // If Network agent failed, fallback to general agent
-                if (!response.Success)
-                {
-                    _logger.LogInformation("Network Agent failed, falling back to General Agent");
-                    response = await _generalAgent.AskAsync(question, conversationHistory);
-                    response.AgentType = "General (Network fallback)";
-                }
-                break;
-                
-            default:
-                response = await _generalAgent.AskAsync(question, conversationHistory);
-                response.AgentType = "General";
-                break;
+            AgentType.SAP => SpecialistType.SAP,
+            AgentType.Network => SpecialistType.Network,
+            _ => SpecialistType.General
+        };
+        
+        // Get specialist-specific context (e.g., SAP lookup data)
+        string? specialistContext = null;
+        
+        if (agentType == AgentType.SAP)
+        {
+            specialistContext = await GetSapSpecialistContextAsync(question);
         }
+        
+        // === NEW UNIFIED APPROACH ===
+        // Always use KnowledgeAgentService (full search) + specialist prompts
+        response = await _generalAgent.AskWithSpecialistAsync(
+            question, 
+            specialistType, 
+            specialistContext, 
+            conversationHistory);
+        
+        response.AgentType = specialistType.ToString();
 
         stopwatch.Stop();
         _logger.LogInformation("Query completed: Agent={Agent}, Success={Success}, Time={Ms}ms",
-            agentType, response.Success, stopwatch.ElapsedMilliseconds);
+            specialistType, response.Success, stopwatch.ElapsedMilliseconds);
 
         return response;
+    }
+    
+    /// <summary>
+    /// Get SAP-specific context (transactions, roles, positions lookup)
+    /// </summary>
+    private async Task<string?> GetSapSpecialistContextAsync(string question)
+    {
+        try
+        {
+            await _sapLookup.InitializeAsync();
+            if (!_sapLookup.IsAvailable) return null;
+            
+            var sb = new StringBuilder();
+            var words = question.Split(new[] { ' ', ',', '?', '!', '.', ':', ';', '"', '\'', '(', ')' }, 
+                StringSplitOptions.RemoveEmptyEntries);
+            
+            foreach (var word in words)
+            {
+                var clean = word.Trim().ToUpperInvariant();
+                if (clean.Length < 2 || clean.Length > 10) continue;
+                
+                var transaction = _sapLookup.GetTransaction(clean);
+                if (transaction != null)
+                {
+                    sb.AppendLine($"SAP Transaction {clean}: {transaction.Description}");
+                }
+                
+                var role = _sapLookup.GetRole(clean);
+                if (role != null)
+                {
+                    sb.AppendLine($"SAP Role {clean}: {role.Description}");
+                }
+                
+                var position = _sapLookup.GetPosition(clean);
+                if (position != null)
+                {
+                    sb.AppendLine($"SAP Position {clean}: {position.Name}");
+                }
+            }
+            
+            return sb.Length > 0 ? sb.ToString() : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error getting SAP specialist context");
+            return null;
+        }
+    }
+    
+    /// <summary>
+    /// Direct specialist call (implements interface, delegates to general agent)
+    /// </summary>
+    public Task<AgentResponse> AskWithSpecialistAsync(string question, SpecialistType specialist, string? specialistContext = null, List<ChatMessage>? conversationHistory = null)
+    {
+        return _generalAgent.AskWithSpecialistAsync(question, specialist, specialistContext, conversationHistory);
     }
 
     /// <summary>
