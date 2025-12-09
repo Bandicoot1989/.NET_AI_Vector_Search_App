@@ -114,7 +114,7 @@ Te recomiendo abrir un ticket en el portal de soporte para que el equipo de IT p
 
     private readonly QueryCacheService? _cacheService;
     private readonly FeedbackService? _feedbackService;
-    private readonly JiraSolutionSearchService? _jiraSolutionService;
+    private readonly IJiraSolutionService? _jiraSolutionService;
 
     // Confidence threshold for feedback loop - if best score is below this, suggest opening a ticket
     private const double ConfidenceThreshold = 0.65;
@@ -129,7 +129,7 @@ Te recomiendo abrir un ticket en el portal de soporte para que el equipo de IT p
         ConfluenceKnowledgeService? confluenceService,
         QueryCacheService? cacheService,
         FeedbackService? feedbackService,
-        JiraSolutionSearchService? jiraSolutionService,
+        IJiraSolutionService? jiraSolutionService,
         ILogger<KnowledgeAgentService> logger)
     {
         // IMPORTANT: GPT_NAME is for embeddings, CHAT_NAME is for chat completions
@@ -151,7 +151,7 @@ Te recomiendo abrir un ticket en el portal de soporte para que el equipo de IT p
             confluenceService?.IsConfigured == true ? "Configured" : "Not configured",
             cacheService != null ? "Enabled" : "Disabled",
             feedbackService != null ? "Enabled" : "Disabled",
-            jiraSolutionService?.IsAvailable == true ? "Enabled" : "Disabled");
+            jiraSolutionService != null ? "Enabled" : "Disabled");
     }
 
     #region Query Analysis (Tier 1 Optimizations)

@@ -98,6 +98,11 @@ public interface IJiraSolutionService
     Task<List<JiraSolutionSearchResult>> SearchSolutionsAsync(string query, int topK = 5);
     
     /// <summary>
+    /// Search formatted for agent context (returns string for LLM prompt)
+    /// </summary>
+    Task<string> SearchForAgentAsync(string query, int topK = 3);
+    
+    /// <summary>
     /// Get a solution by ticket ID
     /// </summary>
     Task<JiraSolution?> GetSolutionByTicketIdAsync(string ticketId);
