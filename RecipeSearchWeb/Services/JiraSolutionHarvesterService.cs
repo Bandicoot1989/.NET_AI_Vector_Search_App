@@ -7,15 +7,22 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
 using Azure.Storage.Blobs;
 using System.Text.Json;
+using OpenAI.Embeddings;
 using RecipeSearchWeb.Interfaces;
 using RecipeSearchWeb.Models;
 
 namespace RecipeSearchWeb.Services
 {
+    /// <summary>
+    /// Background service that automatically harvests solutions from resolved Jira tickets.
+    /// Fase 4: Generates embeddings and integrates with the search system.
+    /// </summary>
     public class JiraSolutionHarvesterService : BackgroundService
     {
         private readonly IJiraClient _jiraClient;
         private readonly BlobContainerClient _blobContainer;
+        private readonly JiraSolutionStorageService _storageService;
+        private readonly EmbeddingClient _embeddingClient;
         private readonly ILogger<JiraSolutionHarvesterService> _logger;
         private readonly TimeSpan _interval;
         private const string ProcessedTicketsBlob = "harvested-tickets.json";
@@ -24,36 +31,45 @@ namespace RecipeSearchWeb.Services
 
         public JiraSolutionHarvesterService(
             IJiraClient jiraClient, 
-            [FromKeyedServices("harvested-solutions")] BlobContainerClient blobContainer, 
+            [FromKeyedServices("harvested-solutions")] BlobContainerClient blobContainer,
+            JiraSolutionStorageService storageService,
+            EmbeddingClient embeddingClient,
             ILogger<JiraSolutionHarvesterService> logger)
         {
             _jiraClient = jiraClient;
             _blobContainer = blobContainer;
+            _storageService = storageService;
+            _embeddingClient = embeddingClient;
             _logger = logger;
-            _interval = TimeSpan.FromHours(6); // Configurable
+            _interval = TimeSpan.FromHours(6); // Harvest every 6 hours
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            _logger.LogInformation("JiraSolutionHarvesterService started");
+            _logger.LogInformation("JiraSolutionHarvesterService started - Fase 4: Full integration with search");
             
-            // Initialize container on first run (async, won't block startup)
+            // Wait a bit for other services to initialize
+            await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
+            
+            // Initialize container on first run
             if (!_containerInitialized)
             {
                 try
                 {
                     await _blobContainer.CreateIfNotExistsAsync(cancellationToken: stoppingToken);
+                    await _storageService.InitializeAsync();
                     _containerInitialized = true;
-                    _logger.LogInformation("Blob container initialized");
+                    _logger.LogInformation("Storage containers initialized");
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Failed to initialize blob container - harvesting disabled");
+                    _logger.LogError(ex, "Failed to initialize storage containers - harvesting disabled");
                     return;
                 }
             }
             
             await LoadProcessedTicketsAsync(stoppingToken);
+            
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
@@ -71,9 +87,15 @@ namespace RecipeSearchWeb.Services
         private async Task HarvestSolutionsAsync(CancellationToken cancellationToken)
         {
             _logger.LogInformation("Harvesting Jira solutions...");
-            var tickets = await _jiraClient.GetResolvedTicketsAsync(7, null, 50); // Últimos 7 días, configurable
-            var harvested = new List<HarvestedSolution>();
+            
+            // Get resolved tickets from last 7 days
+            var tickets = await _jiraClient.GetResolvedTicketsAsync(7, null, 50);
+            _logger.LogInformation("Found {Count} resolved tickets from Jira", tickets.Count);
+            
+            var newSolutions = new List<JiraSolution>();
             int skipped = 0;
+            int noSolution = 0;
+            
             foreach (var ticket in tickets)
             {
                 if (_processedTickets.Contains(ticket.Key))
@@ -81,23 +103,228 @@ namespace RecipeSearchWeb.Services
                     skipped++;
                     continue;
                 }
-                var solution = ExtractSolutionFromTicket(ticket);
+                
+                var solution = await ExtractAndProcessSolutionAsync(ticket, cancellationToken);
                 if (solution != null)
                 {
-                    harvested.Add(solution);
+                    newSolutions.Add(solution);
+                    _processedTickets.Add(ticket.Key);
+                }
+                else
+                {
+                    noSolution++;
+                    // Still mark as processed to avoid re-checking
                     _processedTickets.Add(ticket.Key);
                 }
             }
-            if (harvested.Count > 0)
+            
+            if (newSolutions.Count > 0)
             {
-                await SaveSolutionsAsync(harvested, cancellationToken);
+                // Load existing solutions and merge
+                var existingSolutions = await _storageService.LoadSolutionsAsync();
+                existingSolutions.AddRange(newSolutions);
+                
+                // Save merged solutions
+                await _storageService.SaveSolutionsAsync(existingSolutions);
                 await SaveProcessedTicketsAsync(cancellationToken);
-                _logger.LogInformation("{Count} solutions harvested and saved. {Skipped} tickets skipped (already processed).", harvested.Count, skipped);
+                
+                _logger.LogInformation(
+                    "Harvesting complete: {New} new solutions added (total: {Total}). {Skipped} skipped, {NoSolution} without solution.", 
+                    newSolutions.Count, existingSolutions.Count, skipped, noSolution);
             }
             else
             {
-                _logger.LogInformation("No new solutions found. {Skipped} tickets skipped (already processed).", skipped);
+                await SaveProcessedTicketsAsync(cancellationToken);
+                _logger.LogInformation(
+                    "No new solutions found. {Skipped} skipped (already processed), {NoSolution} without solution.", 
+                    skipped, noSolution);
             }
+        }
+
+        /// <summary>
+        /// Extract solution from ticket and generate embedding
+        /// </summary>
+        private async Task<JiraSolution?> ExtractAndProcessSolutionAsync(JiraTicket ticket, CancellationToken cancellationToken)
+        {
+            // Look for solution in comments
+            var solutionText = ExtractSolutionText(ticket);
+            if (string.IsNullOrWhiteSpace(solutionText))
+            {
+                return null;
+            }
+
+            try
+            {
+                // Create the JiraSolution object
+                var solution = new JiraSolution
+                {
+                    TicketId = ticket.Key,
+                    TicketTitle = ticket.Summary,
+                    Problem = ticket.Summary,
+                    RootCause = "", // Could be extracted with LLM in future
+                    Solution = solutionText,
+                    Steps = ExtractSteps(solutionText),
+                    System = DetectSystem(ticket.Summary + " " + ticket.Description),
+                    Category = ticket.Project,
+                    Keywords = ExtractKeywords(ticket.Summary + " " + solutionText),
+                    Priority = ticket.Priority ?? "Medium",
+                    ResolvedDate = ticket.Resolved ?? DateTime.UtcNow,
+                    HarvestedDate = DateTime.UtcNow,
+                    ValidationCount = 0,
+                    IsPromoted = false,
+                    JiraUrl = $"https://antolin.atlassian.net/browse/{ticket.Key}"
+                };
+                
+                // Generate embedding for semantic search
+                var searchableText = solution.GetSearchableText();
+                var embeddingResult = await _embeddingClient.GenerateEmbeddingAsync(searchableText, cancellationToken: cancellationToken);
+                solution.Embedding = embeddingResult.Value.ToFloats();
+                
+                _logger.LogDebug("Generated embedding for {TicketId}: {TextLen} chars -> {EmbeddingLen} dims", 
+                    ticket.Key, searchableText.Length, solution.Embedding.Length);
+                
+                return solution;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to process solution from ticket {TicketId}", ticket.Key);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Extract solution text from ticket comments
+        /// </summary>
+        private string? ExtractSolutionText(JiraTicket ticket)
+        {
+            if (ticket.Comments == null || ticket.Comments.Count == 0)
+                return null;
+            
+            var solutionKeywords = new[] 
+            { 
+                "solución", "solucion", "solved", "resuelto", "fixed", "resolved", 
+                "pasos:", "steps:", "to fix:", "para resolver:", "solution:",
+                "se resolvió", "se solucionó", "done", "completado", "completed"
+            };
+            
+            // First pass: look for comments with explicit solution keywords
+            foreach (var comment in ticket.Comments.OrderByDescending(c => c.Created))
+            {
+                if (string.IsNullOrWhiteSpace(comment.Body)) continue;
+                
+                var bodyLower = comment.Body.ToLower();
+                if (solutionKeywords.Any(k => bodyLower.Contains(k)))
+                {
+                    return CleanCommentText(comment.Body);
+                }
+            }
+            
+            // Second pass: if no explicit solution, use the last non-trivial comment
+            var lastComment = ticket.Comments
+                .Where(c => !string.IsNullOrWhiteSpace(c.Body) && c.Body.Length > 50)
+                .OrderByDescending(c => c.Created)
+                .FirstOrDefault();
+            
+            if (lastComment != null)
+            {
+                return CleanCommentText(lastComment.Body);
+            }
+            
+            return null;
+        }
+
+        /// <summary>
+        /// Clean and normalize comment text
+        /// </summary>
+        private string CleanCommentText(string text)
+        {
+            // Remove ADF formatting artifacts if any
+            var cleaned = text
+                .Replace("\\n", "\n")
+                .Replace("\\r", "")
+                .Trim();
+            
+            // Limit length for embedding
+            if (cleaned.Length > 2000)
+            {
+                cleaned = cleaned.Substring(0, 2000) + "...";
+            }
+            
+            return cleaned;
+        }
+
+        /// <summary>
+        /// Extract step-by-step instructions from solution text
+        /// </summary>
+        private List<string> ExtractSteps(string solutionText)
+        {
+            var steps = new List<string>();
+            var lines = solutionText.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            
+            foreach (var line in lines)
+            {
+                var trimmed = line.Trim();
+                // Look for numbered steps or bullet points
+                if (System.Text.RegularExpressions.Regex.IsMatch(trimmed, @"^(\d+[\.\)\-]|[\-\*\•])"))
+                {
+                    var step = System.Text.RegularExpressions.Regex.Replace(trimmed, @"^(\d+[\.\)\-]|[\-\*\•])\s*", "");
+                    if (!string.IsNullOrWhiteSpace(step))
+                    {
+                        steps.Add(step);
+                    }
+                }
+            }
+            
+            return steps.Take(7).ToList(); // Max 7 steps
+        }
+
+        /// <summary>
+        /// Detect which system/application the ticket relates to
+        /// </summary>
+        private string DetectSystem(string text)
+        {
+            var textLower = text.ToLower();
+            
+            if (textLower.Contains("sap") || textLower.Contains("bpc") || textLower.Contains("hana"))
+                return "SAP";
+            if (textLower.Contains("vpn") || textLower.Contains("zscaler") || textLower.Contains("network") || textLower.Contains("red"))
+                return "Network";
+            if (textLower.Contains("sharepoint") || textLower.Contains("onedrive") || textLower.Contains("teams"))
+                return "Microsoft 365";
+            if (textLower.Contains("email") || textLower.Contains("correo") || textLower.Contains("outlook"))
+                return "Email";
+            if (textLower.Contains("printer") || textLower.Contains("impresora"))
+                return "Hardware";
+            if (textLower.Contains("password") || textLower.Contains("contraseña") || textLower.Contains("acceso"))
+                return "Access";
+            
+            return "General";
+        }
+
+        /// <summary>
+        /// Extract relevant keywords for search optimization
+        /// </summary>
+        private List<string> ExtractKeywords(string text)
+        {
+            var keywords = new List<string>();
+            var textLower = text.ToLower();
+            
+            var commonKeywords = new[]
+            {
+                "sap", "bpc", "vpn", "zscaler", "sharepoint", "onedrive", "teams", "outlook",
+                "password", "contraseña", "acceso", "permiso", "error", "problema",
+                "usuario", "cuenta", "conexión", "red", "impresora", "instalación"
+            };
+            
+            foreach (var keyword in commonKeywords)
+            {
+                if (textLower.Contains(keyword))
+                {
+                    keywords.Add(keyword);
+                }
+            }
+            
+            return keywords.Distinct().Take(10).ToList();
         }
 
         private async Task LoadProcessedTicketsAsync(CancellationToken cancellationToken)
@@ -129,47 +356,12 @@ namespace RecipeSearchWeb.Services
                 var json = JsonSerializer.Serialize(_processedTickets, new JsonSerializerOptions { WriteIndented = true });
                 using var ms = new System.IO.MemoryStream(System.Text.Encoding.UTF8.GetBytes(json));
                 await blobClient.UploadAsync(ms, overwrite: true, cancellationToken);
-                _logger.LogInformation("Saved {Count} processed Jira tickets.", _processedTickets.Count);
+                _logger.LogDebug("Saved {Count} processed Jira tickets.", _processedTickets.Count);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to save processed tickets list.");
             }
-        }
-
-        private HarvestedSolution? ExtractSolutionFromTicket(JiraTicket ticket)
-        {
-            if (ticket.Comments == null || ticket.Comments.Count == 0)
-                return null;
-            var keywords = new[] { "solución", "solucion", "resuelto", "fixed", "resolved", "pasos:", "steps:", "to fix:", "para resolver:" };
-            foreach (var comment in ticket.Comments)
-            {
-                if (keywords.Any(k => comment.Body != null && comment.Body.ToLower().Contains(k)))
-                {
-                    return new HarvestedSolution
-                    {
-                        Id = Guid.NewGuid().ToString(),
-                        TicketKey = ticket.Key,
-                        Problem = ticket.Summary,
-                        Context = ticket.Description,
-                        Solution = comment.Body ?? string.Empty,
-                        Category = ticket.Project,
-                        Tags = Array.Empty<string>(),
-                        ExtractedAt = DateTime.UtcNow,
-                        SourceUrl = $"https://antolin.atlassian.net/browse/{ticket.Key}"
-                    };
-                }
-            }
-            return null;
-        }
-
-        private async Task SaveSolutionsAsync(List<HarvestedSolution> solutions, CancellationToken cancellationToken)
-        {
-            var blobName = $"harvested-solutions/{DateTime.UtcNow:yyyyMMdd_HHmmss}.json";
-            var blobClient = _blobContainer.GetBlobClient(blobName);
-            var json = JsonSerializer.Serialize(solutions, new JsonSerializerOptions { WriteIndented = true });
-            using var ms = new System.IO.MemoryStream(System.Text.Encoding.UTF8.GetBytes(json));
-            await blobClient.UploadAsync(ms, overwrite: true, cancellationToken);
         }
     }
 }
