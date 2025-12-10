@@ -42,7 +42,7 @@ Basado en el análisis de la arquitectura actual (Tier 3 Multi-Agent, Clean Arch
 | 🥉 **3** | Re-Ranking RRF | 1 día | Alto | ✅ Completado |
 | 4 | Router LLM (fallback) | 0.5 días | Alto | ✅ Completado |
 | 5 | Smart Chunking | 2-3 días | Muy Alto | ⏳ Pendiente |
-| 6 | Auto-Sync Jira | 3-4 días | Medio | ⏸️ Backlog |
+| 6 | Jira Solution Harvester | 2 días | Alto | ✅ Completado |
 
 ---
 
@@ -330,10 +330,39 @@ El Owner puede ayudar: "La app de Juan de HR" → encuentra la app del equipo de
 ## ✅ Decisiones Tomadas
 
 1. **Modelos:** Mantener `gpt-4o-mini` + `text-embedding-3-small`
-2. **Auto-Sync Jira:** Postergar a backlog
+2. **Jira Solution Harvester:** ✅ Implementado (10 Diciembre 2025)
 3. **Cross-Encoder:** No implementar (RRF es suficiente por ahora)
 
 ---
 
+## 🎉 Jira Solution Harvester (Completado 10 Dic 2025)
+
+### Descripción
+BackgroundService que automáticamente recolecta tickets resueltos de Jira cada 6 horas, extrae soluciones y las almacena para enriquecer el conocimiento del bot.
+
+### Componentes Implementados
+
+| Componente | Archivo | Descripción |
+|------------|---------|-------------|
+| `JiraSolutionHarvesterService` | `Services/JiraSolutionHarvesterService.cs` | BackgroundService que ejecuta harvesting cada 6 horas |
+| `BlobContainerClient (keyed)` | DI | Contenedor `harvested-solutions` para persistencia |
+| `HarvestedSolution` | `Models/SapModels.cs` | Modelo para soluciones extraídas |
+
+### Características
+- ⏰ Ejecución automática cada 6 horas
+- 🔄 Deduplicación: no reprocesa tickets ya cosechados
+- 💾 Persistencia en Azure Blob Storage (`harvested-solutions` container)
+- 📝 Extracción inteligente de soluciones desde descripción y comentarios
+- 🔒 Registro de tickets procesados en `harvested-tickets.json`
+
+### Flujo de Datos
+```
+Jira API → JiraSolutionHarvesterService → HarvestedSolution → Azure Blob Storage
+                    ↓
+            Deduplicación (HashSet + Blob JSON)
+```
+
+---
+
 *Documento creado: 4 Diciembre 2025*  
-*Última actualización: 4 Diciembre 2025*
+*Última actualización: 10 Diciembre 2025*

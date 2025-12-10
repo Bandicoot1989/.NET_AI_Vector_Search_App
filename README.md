@@ -14,6 +14,7 @@
 - **🔍 RAG Search** - Retrieval-Augmented Generation con Knowledge Base, Context y Confluence
 - **📊 Vector Search** - Embeddings con Azure OpenAI (text-embedding-3-small)
 - **💬 Chat Interface** - Bot conversacional con historial y streaming
+- **🎫 Jira Solution Harvester** - BackgroundService que recolecta soluciones de tickets resueltos automáticamente
 
 ### Búsqueda Inteligente
 - **Query Expansion** - Expansión automática de consultas con sinónimos
