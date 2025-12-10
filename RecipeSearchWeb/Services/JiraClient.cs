@@ -82,23 +82,151 @@ public class JiraClient : IJiraClient
     }
 
     /// <summary>
+    /// Raw search - returns the raw JSON response from Jira for diagnostics
+    /// </summary>
+    public async Task<object> RawSearchAsync(string jql, int maxResults = 5)
+    {
+        if (!_isConfigured)
+        {
+            return new { error = "Not configured", baseUrl = _baseUrl ?? "null" };
+        }
+
+        try
+        {
+            var requestBody = new Dictionary<string, object>
+            {
+                ["jql"] = jql,
+                ["maxResults"] = maxResults,
+                ["fields"] = new[] { "key", "summary", "status" }
+            };
+
+            var jsonBody = JsonSerializer.Serialize(requestBody);
+            var jsonContent = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+            
+            var response = await _httpClient.PostAsync("/rest/api/3/search/jql", jsonContent);
+            var content = await response.Content.ReadAsStringAsync();
+            
+            // Try to parse as JSON, otherwise return raw
+            try
+            {
+                var parsed = JsonSerializer.Deserialize<JsonElement>(content);
+                return new 
+                { 
+                    statusCode = (int)response.StatusCode,
+                    requestBody = jsonBody,
+                    requestUrl = $"{_baseUrl}/rest/api/3/search/jql",
+                    response = parsed
+                };
+            }
+            catch
+            {
+                return new 
+                { 
+                    statusCode = (int)response.StatusCode,
+                    requestBody = jsonBody,
+                    rawResponse = content.Length > 2000 ? content.Substring(0, 2000) : content
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            return new { error = ex.Message, stackTrace = ex.StackTrace };
+        }
+    }
+
+    /// <summary>
+    /// Test deserialization directly - for debugging
+    /// </summary>
+    public async Task<object> TestDeserializationAsync()
+    {
+        if (!_isConfigured)
+        {
+            return new { error = "Not configured" };
+        }
+
+        try
+        {
+            var requestBody = new Dictionary<string, object>
+            {
+                ["jql"] = "resolved >= -7d ORDER BY resolved DESC",
+                ["maxResults"] = 3,
+                ["fields"] = new[] { "key", "summary", "status", "resolution" }
+            };
+
+            var jsonBody = JsonSerializer.Serialize(requestBody);
+            var jsonContent = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+            
+            var response = await _httpClient.PostAsync("/rest/api/3/search/jql", jsonContent);
+            var content = await response.Content.ReadAsStringAsync();
+            
+            // Now try to deserialize with our model
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var searchResult = JsonSerializer.Deserialize<JiraSearchResponsePublic>(content, options);
+            
+            return new
+            {
+                success = true,
+                rawContentLength = content.Length,
+                rawContentPreview = content.Length > 500 ? content.Substring(0, 500) : content,
+                deserializedIssuesCount = searchResult?.Issues?.Count ?? -1,
+                deserializedIsLast = searchResult?.IsLast,
+                issues = searchResult?.Issues?.Select(i => new { key = i.Key, summary = i.Fields?.Summary, status = i.Fields?.Status?.Name })
+            };
+        }
+        catch (Exception ex)
+        {
+            return new { error = ex.Message, stackTrace = ex.StackTrace };
+        }
+    }
+
+    // Public version of the response model for testing
+    public class JiraSearchResponsePublic
+    {
+        public bool IsLast { get; set; }
+        public string? NextPageToken { get; set; }
+        public List<JiraIssueResponsePublic>? Issues { get; set; }
+    }
+    
+    public class JiraIssueResponsePublic
+    {
+        public string? Key { get; set; }
+        public JiraFieldsResponsePublic? Fields { get; set; }
+    }
+    
+    public class JiraFieldsResponsePublic
+    {
+        public string? Summary { get; set; }
+        public JiraStatusResponsePublic? Status { get; set; }
+        public JiraResolutionResponsePublic? Resolution { get; set; }
+    }
+    
+    public class JiraStatusResponsePublic
+    {
+        public string? Name { get; set; }
+    }
+    
+    public class JiraResolutionResponsePublic
+    {
+        public string? Name { get; set; }
+    }
+
+    /// <summary>
     /// Get resolved/closed tickets from the last N days
     /// </summary>
     public async Task<List<JiraTicket>> GetResolvedTicketsAsync(int days = 30, List<string>? projectKeys = null, int maxResults = 100)
     {
-        if (!_isConfigured) return new List<JiraTicket>();
+        if (!_isConfigured) 
+        {
+            _logger.LogWarning("JiraClient not configured - returning empty list");
+            return new List<JiraTicket>();
+        }
         
         try
         {
-            // Build JQL query
-            var jql = $"status in (Resolved, Closed, Done) AND resolved >= -{days}d";
+            // Build JQL query - simplified to just resolved date
+            var jql = $"resolved >= -{days}d ORDER BY resolved DESC";
             
-            if (projectKeys?.Any() == true)
-            {
-                jql += $" AND project in ({string.Join(",", projectKeys)})";
-            }
-            
-            jql += " ORDER BY resolved DESC";
+            _logger.LogInformation("Searching Jira with JQL: {Jql}", jql);
             
             return await SearchTicketsAsync(jql, maxResults);
         }
@@ -186,60 +314,77 @@ public class JiraClient : IJiraClient
     /// </summary>
     public async Task<List<JiraTicket>> SearchTicketsAsync(string jql, int maxResults = 50)
     {
-        if (!_isConfigured) return new List<JiraTicket>();
+        if (!_isConfigured) 
+        {
+            _logger.LogWarning("JiraClient not configured");
+            return new List<JiraTicket>();
+        }
         
         var tickets = new List<JiraTicket>();
-        var startAt = 0;
+        string? nextPageToken = null;
         
         try
         {
             while (tickets.Count < maxResults)
             {
-                var batchSize = Math.Min(50, maxResults - tickets.Count); // Jira max is 50 per request
+                var batchSize = Math.Min(50, maxResults - tickets.Count);
                 
-                // Use new POST API (GET /search was deprecated)
-                var requestBody = new
+                // Build request body for new POST API
+                var requestBody = new Dictionary<string, object>
                 {
-                    jql = jql,
-                    startAt = startAt,
-                    maxResults = batchSize,
-                    fields = new[] { "key", "summary", "description", "status", "resolution", "priority", "project", "assignee", "reporter", "created", "resolutiondate", "comment" }
+                    ["jql"] = jql,
+                    ["maxResults"] = batchSize,
+                    ["fields"] = new[] { "key", "summary", "description", "status", "resolution", "priority", "project", "assignee", "reporter", "created", "resolutiondate", "comment" }
                 };
                 
-                var jsonContent = new StringContent(
-                    JsonSerializer.Serialize(requestBody, _jsonOptions),
-                    Encoding.UTF8,
-                    "application/json"
-                );
+                // Add pagination token if we have one
+                if (!string.IsNullOrEmpty(nextPageToken))
+                {
+                    requestBody["nextPageToken"] = nextPageToken;
+                }
                 
+                var jsonBody = JsonSerializer.Serialize(requestBody);
+                _logger.LogInformation("Jira request body: {Body}", jsonBody);
+                
+                var jsonContent = new StringContent(jsonBody, Encoding.UTF8, "application/json");
                 var response = await _httpClient.PostAsync("/rest/api/3/search/jql", jsonContent);
+                
+                var content = await response.Content.ReadAsStringAsync();
+                _logger.LogInformation("Jira API response length: {Length}", content.Length);
                 
                 if (!response.IsSuccessStatusCode)
                 {
-                    var errorContent = await response.Content.ReadAsStringAsync();
-                    _logger.LogError("Jira search failed: {Status} - JQL: {Jql} - Error: {Error}", response.StatusCode, jql, errorContent);
+                    _logger.LogError("Jira search failed: {Status} - Error: {Error}", response.StatusCode, content);
                     break;
                 }
                 
-                var content = await response.Content.ReadAsStringAsync();
-                var searchResult = JsonSerializer.Deserialize<JiraSearchResponse>(content, _jsonOptions);
+                // Use the same deserialization options that work in TestDeserializationAsync
+                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                var searchResult = JsonSerializer.Deserialize<JiraSearchResponsePublic>(content, options);
+                _logger.LogInformation("Deserialized: Issues={IssueCount}, IsLast={IsLast}", 
+                    searchResult?.Issues?.Count ?? -1, searchResult?.IsLast);
                 
                 if (searchResult?.Issues == null || !searchResult.Issues.Any())
+                {
+                    _logger.LogInformation("No issues found in response");
                     break;
+                }
                 
                 foreach (var issue in searchResult.Issues)
                 {
-                    var ticket = MapToTicket(issue);
+                    var ticket = MapToTicketFromPublic(issue);
                     tickets.Add(ticket);
+                    _logger.LogInformation("Added ticket: {Key} - {Summary}", ticket.Key, ticket.Summary);
                 }
                 
-                if (searchResult.Issues.Count < batchSize)
-                    break; // No more results
+                // Check if there are more pages
+                if (searchResult.IsLast || string.IsNullOrEmpty(searchResult.NextPageToken))
+                    break;
                     
-                startAt += batchSize;
+                nextPageToken = searchResult.NextPageToken;
             }
             
-            _logger.LogInformation("Jira search returned {Count} tickets for JQL: {Jql}", tickets.Count, jql);
+            _logger.LogInformation("Jira search returned {Count} tickets", tickets.Count);
             return tickets;
         }
         catch (Exception ex)
@@ -284,6 +429,58 @@ public class JiraClient : IJiraClient
                 Created = c.Created
             }).ToList() ?? new List<JiraComment>()
         };
+    }
+
+    /// <summary>
+    /// Map JiraIssueResponsePublic (from public API) to JiraTicket
+    /// </summary>
+    private JiraTicket MapToTicketFromPublic(JiraIssueResponsePublic issue)
+    {
+        return new JiraTicket
+        {
+            Key = issue.Key ?? "",
+            Summary = issue.Fields?.Summary ?? "",
+            Description = "", // Description not included in public response fields
+            Status = issue.Fields?.Status?.Name ?? "",
+            Resolution = issue.Fields?.Resolution?.Name ?? "",
+            Priority = "", // Not included in public response
+            Project = "", // Not included in public response  
+            Assignee = "", // Not included in public response
+            Reporter = "", // Not included in public response
+            Created = DateTime.MinValue, // Not included in public response
+            Resolved = null, // Not included in public response
+            Comments = new List<JiraComment>() // Not included in public response
+        };
+    }
+
+    /// <summary>
+    /// Extract comments from JsonElement fields
+    /// </summary>
+    private List<JiraComment> ExtractCommentsFromPublic(JsonElement fields)
+    {
+        var comments = new List<JiraComment>();
+        
+        if (fields.TryGetProperty("comment", out var commentContainer) && 
+            commentContainer.TryGetProperty("comments", out var commentsArray) &&
+            commentsArray.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var comment in commentsArray.EnumerateArray())
+            {
+                comments.Add(new JiraComment
+                {
+                    Author = comment.TryGetProperty("author", out var author) && 
+                             author.TryGetProperty("displayName", out var authorName)
+                        ? authorName.GetString() ?? "Unknown" : "Unknown",
+                    Body = comment.TryGetProperty("body", out var body) 
+                        ? ExtractTextFromAdf(body) : "",
+                    Created = comment.TryGetProperty("created", out var created) && 
+                              DateTime.TryParse(created.GetString(), out var createdDate)
+                        ? createdDate : DateTime.MinValue
+                });
+            }
+        }
+        
+        return comments;
     }
 
     /// <summary>
@@ -354,6 +551,8 @@ public class JiraClient : IJiraClient
         public int StartAt { get; set; }
         public int MaxResults { get; set; }
         public int Total { get; set; }
+        public bool IsLast { get; set; }
+        public string? NextPageToken { get; set; }
         public List<JiraIssueResponse>? Issues { get; set; }
     }
     

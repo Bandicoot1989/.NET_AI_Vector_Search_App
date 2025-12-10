@@ -204,4 +204,123 @@ public class JiraTestController : ControllerBase
             }
         });
     }
+
+    /// <summary>
+    /// Raw diagnostic endpoint - calls Jira API directly and returns raw response
+    /// GET /api/jiratest/raw?jql=resolved >= -7d
+    /// </summary>
+    [HttpGet("raw")]
+    public async Task<IActionResult> RawJiraQuery([FromQuery] string? jql = "resolved >= -7d ORDER BY resolved DESC", [FromQuery] int maxResults = 3)
+    {
+        try
+        {
+            var diagnostics = new List<string>();
+            diagnostics.Add($"Starting raw Jira query at {DateTime.UtcNow}");
+            diagnostics.Add($"JQL: {jql}");
+            diagnostics.Add($"MaxResults: {maxResults}");
+            diagnostics.Add($"IsConfigured: {_jiraClient.IsConfigured}");
+            
+            if (!_jiraClient.IsConfigured)
+            {
+                return Ok(new { success = false, diagnostics, error = "Jira client not configured" });
+            }
+
+            // Call the raw search method
+            var result = await _jiraClient.RawSearchAsync(jql!, maxResults);
+            diagnostics.Add($"Raw search completed");
+            
+            return Ok(new 
+            { 
+                success = true, 
+                diagnostics,
+                rawResponse = result
+            });
+        }
+        catch (Exception ex)
+        {
+            return Ok(new 
+            { 
+                success = false, 
+                error = ex.Message,
+                stackTrace = ex.StackTrace
+            });
+        }
+    }
+
+    /// <summary>
+    /// Debug the full search pipeline
+    /// GET /api/jiratest/debug
+    /// </summary>
+    [HttpGet("debug")]
+    public async Task<IActionResult> DebugSearch([FromQuery] int days = 7, [FromQuery] int maxResults = 3)
+    {
+        var diagnostics = new List<string>();
+        
+        try
+        {
+            diagnostics.Add($"IsConfigured: {_jiraClient.IsConfigured}");
+            
+            // Step 1: Get raw response
+            var jql = $"resolved >= -{days}d ORDER BY resolved DESC";
+            diagnostics.Add($"JQL: {jql}");
+            
+            var rawResult = await _jiraClient.RawSearchAsync(jql, maxResults);
+            diagnostics.Add($"Raw search completed");
+            
+            // Step 2: Try to deserialize manually
+            var rawJson = System.Text.Json.JsonSerializer.Serialize(rawResult);
+            diagnostics.Add($"Raw result type: {rawResult.GetType().Name}");
+            
+            // Step 3: Call actual method
+            var tickets = await _jiraClient.GetResolvedTicketsAsync(days, null, maxResults);
+            diagnostics.Add($"GetResolvedTicketsAsync returned {tickets.Count} tickets");
+            
+            return Ok(new
+            {
+                success = true,
+                diagnostics,
+                ticketCount = tickets.Count,
+                tickets = tickets.Select(t => new 
+                {
+                    key = t.Key,
+                    summary = t.Summary,
+                    status = t.Status,
+                    resolved = t.Resolved
+                }),
+                rawResultPreview = rawJson.Length > 500 ? rawJson.Substring(0, 500) : rawJson
+            });
+        }
+        catch (Exception ex)
+        {
+            diagnostics.Add($"ERROR: {ex.Message}");
+            return Ok(new
+            {
+                success = false,
+                diagnostics,
+                error = ex.Message,
+                stackTrace = ex.StackTrace
+            });
+        }
+    }
+
+    /// <summary>
+    /// Direct deserialize test - skip all intermediate methods
+    /// GET /api/jiratest/deserialize-test
+    /// </summary>
+    [HttpGet("deserialize-test")]
+    public async Task<IActionResult> DeserializeTest()
+    {
+        var diagnostics = new List<string>();
+        
+        try
+        {
+            // Call raw API directly and try to deserialize
+            var result = await _jiraClient.TestDeserializationAsync();
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            return Ok(new { error = ex.Message, stack = ex.StackTrace });
+        }
+    }
 }
