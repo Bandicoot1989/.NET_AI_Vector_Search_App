@@ -51,6 +51,30 @@ public class JiraClient : IJiraClient
     public bool IsConfigured => _isConfigured;
 
     /// <summary>
+    /// Parse Jira ISO 8601 date string to DateTime
+    /// Jira returns dates like "2025-12-10T08:51:17.000+0100"
+    /// </summary>
+    private static DateTime ParseJiraDate(string? dateString)
+    {
+        if (string.IsNullOrEmpty(dateString)) return DateTime.MinValue;
+        
+        if (DateTime.TryParse(dateString, null, System.Globalization.DateTimeStyles.RoundtripKind, out var result))
+            return result;
+        
+        // Fallback: try to parse ISO 8601 format with various timezone formats
+        if (DateTimeOffset.TryParse(dateString, out var offset))
+            return offset.DateTime;
+        
+        return DateTime.MinValue;
+    }
+
+    private static DateTime? ParseJiraDateNullable(string? dateString)
+    {
+        if (string.IsNullOrEmpty(dateString)) return null;
+        return ParseJiraDate(dateString);
+    }
+
+    /// <summary>
     /// Test the connection to Jira
     /// </summary>
     public async Task<bool> TestConnectionAsync()
@@ -203,8 +227,8 @@ public class JiraClient : IJiraClient
         public JiraProjectResponsePublic? Project { get; set; }
         public JiraUserResponsePublic? Assignee { get; set; }
         public JiraUserResponsePublic? Reporter { get; set; }
-        public DateTime? Created { get; set; }
-        public DateTime? Resolutiondate { get; set; }
+        public string? Created { get; set; }  // Jira returns ISO 8601 with timezone
+        public string? Resolutiondate { get; set; }  // Jira returns ISO 8601 with timezone
         public JiraCommentContainerPublic? Comment { get; set; }
     }
     
@@ -245,7 +269,7 @@ public class JiraClient : IJiraClient
     {
         public JiraUserResponsePublic? Author { get; set; }
         public object? Body { get; set; } // Can be ADF or string
-        public DateTime Created { get; set; }
+        public string? Created { get; set; }  // Jira returns ISO 8601 with timezone
     }
 
     /// <summary>
@@ -336,7 +360,7 @@ public class JiraClient : IJiraClient
             {
                 Author = c.Author?.DisplayName ?? "Unknown",
                 Body = ExtractTextFromAdf(c.Body),
-                Created = c.Created
+                Created = ParseJiraDate(c.Created)
             }).ToList() ?? new List<JiraComment>();
         }
         catch (Exception ex)
@@ -458,13 +482,13 @@ public class JiraClient : IJiraClient
             Project = issue.Fields?.Project?.Key ?? "",
             Assignee = issue.Fields?.Assignee?.DisplayName ?? "",
             Reporter = issue.Fields?.Reporter?.DisplayName ?? "",
-            Created = issue.Fields?.Created ?? DateTime.MinValue,
-            Resolved = issue.Fields?.ResolutionDate,
+            Created = ParseJiraDate(issue.Fields?.Created),
+            Resolved = ParseJiraDateNullable(issue.Fields?.ResolutionDate),
             Comments = issue.Fields?.Comment?.Comments?.Select(c => new JiraComment
             {
                 Author = c.Author?.DisplayName ?? "Unknown",
                 Body = ExtractTextFromAdf(c.Body),
-                Created = c.Created
+                Created = ParseJiraDate(c.Created)
             }).ToList() ?? new List<JiraComment>()
         };
     }
@@ -485,13 +509,13 @@ public class JiraClient : IJiraClient
             Project = issue.Fields?.Project?.Key ?? "",
             Assignee = issue.Fields?.Assignee?.DisplayName ?? "",
             Reporter = issue.Fields?.Reporter?.DisplayName ?? "",
-            Created = issue.Fields?.Created ?? DateTime.MinValue,
-            Resolved = issue.Fields?.Resolutiondate,
+            Created = ParseJiraDate(issue.Fields?.Created),
+            Resolved = ParseJiraDateNullable(issue.Fields?.Resolutiondate),
             Comments = issue.Fields?.Comment?.Comments?.Select(c => new JiraComment
             {
                 Author = c.Author?.DisplayName ?? "Unknown",
                 Body = ExtractTextFromAdf(c.Body),
-                Created = c.Created
+                Created = ParseJiraDate(c.Created)
             }).ToList() ?? new List<JiraComment>()
         };
     }
@@ -615,9 +639,9 @@ public class JiraClient : IJiraClient
         public JiraProjectResponse? Project { get; set; }
         public JiraUserResponse? Assignee { get; set; }
         public JiraUserResponse? Reporter { get; set; }
-        public DateTime Created { get; set; }
+        public string? Created { get; set; }  // Jira returns ISO 8601 with timezone
         [JsonPropertyName("resolutiondate")]
-        public DateTime? ResolutionDate { get; set; }
+        public string? ResolutionDate { get; set; }  // Jira returns ISO 8601 with timezone
         public JiraCommentsContainer? Comment { get; set; }
     }
     
@@ -662,7 +686,7 @@ public class JiraClient : IJiraClient
     {
         public JiraUserResponse? Author { get; set; }
         public object? Body { get; set; } // Can be ADF or string
-        public DateTime Created { get; set; }
+        public string? Created { get; set; }  // Jira returns ISO 8601 with timezone
     }
     
     // Atlassian Document Format (ADF) models
