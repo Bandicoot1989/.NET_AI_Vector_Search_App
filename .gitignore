@@ -5,7 +5,10 @@ obj/
 
 # Azure logs (downloaded from App Service)
 logs/
-logs2/
+logs*/
+logs-latest/
+webapp-logs/
+webapp-logs*/
 
 # Test projects with sensitive data
 TestConfluence/
