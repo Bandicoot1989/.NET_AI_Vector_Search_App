@@ -10,7 +10,7 @@ El **Jira Solution Harvester** es un sistema automatizado que extrae soluciones 
 |------|-------------|--------|-------|
 | **Fase 1** | Diseño y Modelos | ✅ Completado | 9 Dic 2025 |
 | **Fase 2** | Cliente Jira API | ✅ Completado | 10 Dic 2025 |
-| **Fase 3** | Harvesting Automático | ⏳ Pendiente | - |
+| **Fase 3** | Harvesting Automático | ✅ Completado | 10 Dic 2025 |
 | **Fase 4** | Integración Búsqueda | ⏳ Pendiente | - |
 
 ---
@@ -128,14 +128,77 @@ Ver detalles en: [JIRA_INTEGRATION_TROUBLESHOOTING.md](./JIRA_INTEGRATION_TROUBL
 
 ---
 
-## Fase 3: Harvesting Automático (Pendiente)
+## Fase 3: Harvesting Automático (Completado)
 
 ### Objetivo
-Crear un servicio que automáticamente:
-1. Escanee tickets resueltos cada 24h
-2. Extraiga soluciones de los comentarios
-3. Genere embeddings para búsqueda
-4. Almacene en Azure Blob Storage
+Servicio BackgroundService que automáticamente:
+1. Escanea tickets resueltos periódicamente (configurable, default 1h)
+2. Extrae soluciones de los comentarios usando LLM
+3. Evita duplicados con persistencia en Azure Blob Storage
+4. Almacena soluciones en contenedor `harvested-solutions`
+
+### Archivos Implementados
+
+| Archivo | Descripción |
+|---------|-------------|
+| `Services/JiraSolutionHarvesterService.cs` | BackgroundService para harvesting automático |
+| `Services/HarvestedSolution.cs` | Modelo de solución extraída |
+| `Extensions/DependencyInjection.cs` | Método `AddJiraSolutionServices()` |
+
+### Flujo de Ejecución
+
+```
+┌───────────────────────────────────────────────────────┐
+│           JiraSolutionHarvesterService                │
+│                (BackgroundService)                     │
+└───────────────────────┬───────────────────────────────┘
+                        │
+         ┌──────────────┼──────────────┐
+         │              │              │
+         ▼              ▼              ▼
+   LoadProcessed   GetTickets   SaveProcessed
+   (Blob Storage)  (Jira API)   (Blob Storage)
+         │              │              │
+         └──────────────┼──────────────┘
+                        │
+                        ▼
+              HarvestSolutionsAsync()
+                        │
+                        ▼
+         ┌──────────────────────────────┐
+         │  Por cada ticket nuevo:      │
+         │  1. Verificar si procesado   │
+         │  2. Extraer solución (LLM)   │
+         │  3. Guardar en Blob Storage  │
+         │  4. Marcar como procesado    │
+         └──────────────────────────────┘
+```
+
+### Deduplicación
+
+El servicio mantiene un archivo `harvested-tickets.json` en Azure Blob Storage con las claves de tickets ya procesados:
+
+```json
+["MT-12345", "MT-12346", "MTT-7890", ...]
+```
+
+Esto evita reprocesar tickets y optimiza el uso de la API de Jira y recursos de LLM.
+
+### Configuración
+
+**appsettings.json:**
+```json
+{
+  "AzureStorage": {
+    "ConnectionString": "...",
+    "HarvestedSolutionsContainer": "harvested-solutions"
+  },
+  "Jira": {
+    "HarvestIntervalMinutes": 60,
+    "HarvestDaysBack": 30
+  }
+}
+```
 
 ### Lógica de Extracción de Soluciones
 
@@ -196,16 +259,17 @@ public class HarvestedSolution
 
 ## Próximos Pasos
 
-1. **Implementar `JiraSolutionHarvester`**
-   - Timer trigger cada 24h
-   - Lógica de extracción de soluciones
-   - Deduplicación (no re-procesar tickets ya vistos)
+1. **~~Implementar `JiraSolutionHarvester`~~** ✅
+   - ~~Timer trigger cada 24h~~
+   - ~~Lógica de extracción de soluciones~~
+   - ~~Deduplicación (no re-procesar tickets ya vistos)~~
 
-2. **Integrar con búsqueda existente**
+2. **Integrar con búsqueda existente (Fase 4)**
    - Añadir soluciones harvested al índice de búsqueda
    - Combinar con Confluence KB
+   - Generar embeddings para búsqueda semántica
 
-3. **Panel de administración**
+3. **Panel de administración (futuro)**
    - Ver soluciones extraídas
    - Editar/aprobar antes de publicar
    - Métricas de harvesting
