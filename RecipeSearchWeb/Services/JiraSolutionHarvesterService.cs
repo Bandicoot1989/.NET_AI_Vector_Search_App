@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 using Azure.Storage.Blobs;
 using System.Text.Json;
 using RecipeSearchWeb.Interfaces;
@@ -19,8 +20,12 @@ namespace RecipeSearchWeb.Services
         private readonly TimeSpan _interval;
         private const string ProcessedTicketsBlob = "harvested-tickets.json";
         private HashSet<string> _processedTickets = new();
+        private bool _containerInitialized = false;
 
-        public JiraSolutionHarvesterService(IJiraClient jiraClient, BlobContainerClient blobContainer, ILogger<JiraSolutionHarvesterService> logger)
+        public JiraSolutionHarvesterService(
+            IJiraClient jiraClient, 
+            [FromKeyedServices("harvested-solutions")] BlobContainerClient blobContainer, 
+            ILogger<JiraSolutionHarvesterService> logger)
         {
             _jiraClient = jiraClient;
             _blobContainer = blobContainer;
@@ -31,6 +36,23 @@ namespace RecipeSearchWeb.Services
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             _logger.LogInformation("JiraSolutionHarvesterService started");
+            
+            // Initialize container on first run (async, won't block startup)
+            if (!_containerInitialized)
+            {
+                try
+                {
+                    await _blobContainer.CreateIfNotExistsAsync(cancellationToken: stoppingToken);
+                    _containerInitialized = true;
+                    _logger.LogInformation("Blob container initialized");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to initialize blob container - harvesting disabled");
+                    return;
+                }
+            }
+            
             await LoadProcessedTicketsAsync(stoppingToken);
             while (!stoppingToken.IsCancellationRequested)
             {

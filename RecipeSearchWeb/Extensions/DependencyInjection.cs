@@ -17,13 +17,24 @@ public static class DependencyInjection
     /// </summary>
     public static IServiceCollection AddJiraSolutionServices(this IServiceCollection services, IConfiguration configuration)
     {
-        // BlobContainerClient for harvested solutions
-        var connectionString = configuration["AzureStorage:ConnectionString"] ?? throw new InvalidOperationException("AzureStorage:ConnectionString not set");
-        var containerName = configuration["AzureStorage:HarvestedSolutionsContainer"] ?? "harvested-solutions";
-        var blobContainer = new Azure.Storage.Blobs.BlobContainerClient(connectionString, containerName);
-        blobContainer.CreateIfNotExists();
-        services.AddSingleton(blobContainer);
-        // Register background service
+        // First register all Jira client and storage services
+        services.AddSingleton<JiraClient>();
+        services.AddSingleton<Interfaces.IJiraClient>(sp => sp.GetRequiredService<JiraClient>());
+        services.AddSingleton<JiraSolutionStorageService>();
+        services.AddSingleton<JiraSolutionSearchService>();
+        services.AddSingleton<Interfaces.IJiraSolutionService>(sp => sp.GetRequiredService<JiraSolutionSearchService>());
+        services.AddSingleton<JiraHarvesterService>();
+        services.AddSingleton<Interfaces.IJiraSolutionHarvester>(sp => sp.GetRequiredService<JiraHarvesterService>());
+        
+        // BlobContainerClient for harvested solutions - use keyed service to avoid conflict with other containers
+        services.AddKeyedSingleton<Azure.Storage.Blobs.BlobContainerClient>("harvested-solutions", (sp, key) =>
+        {
+            var connectionString = configuration["AzureStorage:ConnectionString"] ?? throw new InvalidOperationException("AzureStorage:ConnectionString not set");
+            var containerName = configuration["AzureStorage:HarvestedSolutionsContainer"] ?? "harvested-solutions";
+            return new Azure.Storage.Blobs.BlobContainerClient(connectionString, containerName);
+        });
+        
+        // Register background service for automatic harvesting
         services.AddHostedService<JiraSolutionHarvesterService>();
         return services;
     }
@@ -163,29 +174,6 @@ public static class DependencyInjection
     }
 
     /// <summary>
-    /// Add Jira Solution Harvester services (Learning from resolved tickets)
-    /// </summary>
-    public static IServiceCollection AddJiraSolutionServices(this IServiceCollection services)
-    {
-        // Jira API Client for connecting to Jira
-        services.AddSingleton<JiraClient>();
-        services.AddSingleton<Interfaces.IJiraClient>(sp => sp.GetRequiredService<JiraClient>());
-        
-        // Storage service for Jira solutions
-        services.AddSingleton<JiraSolutionStorageService>();
-        
-        // Search service for finding similar solutions
-        services.AddSingleton<JiraSolutionSearchService>();
-        services.AddSingleton<Interfaces.IJiraSolutionService>(sp => sp.GetRequiredService<JiraSolutionSearchService>());
-        
-        // Harvester service for extracting solutions from tickets
-        services.AddSingleton<JiraHarvesterService>();
-        services.AddSingleton<Interfaces.IJiraSolutionHarvester>(sp => sp.GetRequiredService<JiraHarvesterService>());
-        
-        return services;
-    }
-
-    /// <summary>
     /// Add AI agent services (including Tier 3 Agent Router)
     /// </summary>
     public static IServiceCollection AddAgentServices(this IServiceCollection services)
@@ -236,7 +224,7 @@ public static class DependencyInjection
         services.AddSharePointServices();  // SharePoint KB integration
         services.AddSearchServices();
         services.AddCachingServices();     // Semantic cache
-        services.AddJiraSolutionServices(); // Learning from Jira tickets
+        services.AddJiraSolutionServices(configuration); // Learning from Jira tickets
         services.AddAgentServices();
         services.AddFeedbackServices();    // Feedback for bot training
         services.AddAuthServices();
