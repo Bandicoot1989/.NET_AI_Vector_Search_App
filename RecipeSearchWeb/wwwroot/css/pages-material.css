@@ -379,6 +379,44 @@
     background: rgba(255, 255, 255, 0.1);
 }
 
+/* Search Container Variants */
+.md-search-vertical {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+}
+
+.md-search-box-full {
+    width: 100%;
+}
+
+.md-search-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 12px;
+}
+
+/* Search Button */
+.md-btn-search {
+    height: 44px;
+    min-width: 140px;
+}
+
+.md-btn-icon {
+    font-size: 18px;
+}
+
+.md-spinner-icon {
+    font-size: 18px;
+    animation: spin 1s linear infinite;
+}
+
+/* Disabled state for search input */
+.md-search-input:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
 .md-search-stats {
     margin-top: 12px;
     font-size: 0.875rem;
@@ -838,6 +876,110 @@
     color: rgba(255, 255, 255, 0.95);
     border: 1px solid #3F4042;
     margin: 16px 0;
+}
+
+/* PowerShell Code Container - Enhanced Styling */
+.ps-code-container {
+    background: #0d1117;
+    border-radius: 12px;
+    border: 1px solid #30363d;
+    overflow: hidden;
+    margin: 12px 0;
+}
+
+.ps-code-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 16px;
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+}
+
+.ps-code-lang {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #58a6ff;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.ps-code-lang::before {
+    content: '';
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    background: #012456;
+    border-radius: 3px;
+    border: 1px solid #58a6ff;
+}
+
+.ps-code-copy {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: rgba(88, 166, 255, 0.1);
+    border: 1px solid rgba(88, 166, 255, 0.3);
+    border-radius: 6px;
+    color: #58a6ff;
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.ps-code-copy:hover {
+    background: rgba(88, 166, 255, 0.2);
+    border-color: #58a6ff;
+}
+
+.ps-code-copy .material-symbols-outlined {
+    font-size: 16px;
+}
+
+.ps-code-block {
+    margin: 0;
+    padding: 20px;
+    overflow-x: auto;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Roboto Mono', 'Consolas', 'Monaco', monospace;
+    font-size: 0.8rem;
+    line-height: 1.6;
+    color: #c9d1d9;
+    background: transparent;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.ps-code-block code {
+    font-family: inherit;
+    color: inherit;
+    background: transparent;
+}
+
+/* Scrollbar styling for code block */
+.ps-code-block::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.ps-code-block::-webkit-scrollbar-track {
+    background: #161b22;
+    border-radius: 4px;
+}
+
+.ps-code-block::-webkit-scrollbar-thumb {
+    background: #30363d;
+    border-radius: 4px;
+}
+
+.ps-code-block::-webkit-scrollbar-thumb:hover {
+    background: #484f58;
 }
 
 .md-code-inline {

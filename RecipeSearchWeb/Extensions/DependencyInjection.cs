@@ -27,6 +27,9 @@ public static class DependencyInjection
         services.AddSingleton<JiraHarvesterService>();
         services.AddSingleton<Interfaces.IJiraSolutionHarvester>(sp => sp.GetRequiredService<JiraHarvesterService>());
         
+        // Harvester statistics service
+        services.AddSingleton<HarvesterStatsService>();
+        
         // BlobContainerClient for harvested solutions - use keyed service to avoid conflict with other containers
         services.AddKeyedSingleton<Azure.Storage.Blobs.BlobContainerClient>("harvested-solutions", (sp, key) =>
         {
@@ -165,6 +168,18 @@ public static class DependencyInjection
     }
 
     /// <summary>
+    /// Add Ticket Lookup service for real-time Jira ticket queries
+    /// Enables the chatbot to answer questions about specific tickets (e.g., "Help me with MT-799225")
+    /// </summary>
+    public static IServiceCollection AddTicketLookupServices(this IServiceCollection services)
+    {
+        services.AddSingleton<TicketLookupService>();
+        services.AddSingleton<ITicketLookupService>(sp => sp.GetRequiredService<TicketLookupService>());
+        
+        return services;
+    }
+
+    /// <summary>
     /// Add Feedback services for bot training and improvement
     /// </summary>
     public static IServiceCollection AddFeedbackServices(this IServiceCollection services)
@@ -179,8 +194,19 @@ public static class DependencyInjection
     /// </summary>
     public static IServiceCollection AddAgentServices(this IServiceCollection services)
     {
-        // Register the base Knowledge Agent
-        services.AddSingleton<KnowledgeAgentService>();
+        // Register the base Knowledge Agent with factory to handle optional dependencies
+        services.AddSingleton<KnowledgeAgentService>(sp => new KnowledgeAgentService(
+            sp.GetRequiredService<AzureOpenAIClient>(),
+            sp.GetRequiredService<IConfiguration>(),
+            sp.GetRequiredService<KnowledgeSearchService>(),
+            sp.GetRequiredService<ContextSearchService>(),
+            sp.GetService<ConfluenceKnowledgeService>(),
+            sp.GetService<QueryCacheService>(),
+            sp.GetService<FeedbackService>(),
+            sp.GetService<IJiraSolutionService>(),
+            sp.GetService<ITicketLookupService>(),  // Optional - may be null
+            sp.GetRequiredService<ILogger<KnowledgeAgentService>>()
+        ));
         
         // Register the Agent Router as the primary IKnowledgeAgentService
         // This routes queries to SAP Agent, Network Agent, or General Agent based on content
@@ -226,6 +252,7 @@ public static class DependencyInjection
         services.AddSearchServices();
         services.AddCachingServices();     // Semantic cache
         services.AddJiraSolutionServices(configuration); // Learning from Jira tickets
+        services.AddTicketLookupServices(); // Real-time ticket lookup for chatbot
         services.AddAgentServices();
         services.AddFeedbackServices();    // Feedback for bot training
         services.AddAuthServices();

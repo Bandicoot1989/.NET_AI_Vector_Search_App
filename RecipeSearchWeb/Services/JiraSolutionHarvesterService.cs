@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
@@ -22,6 +23,7 @@ namespace RecipeSearchWeb.Services
         private readonly IJiraClient _jiraClient;
         private readonly BlobContainerClient _blobContainer;
         private readonly JiraSolutionStorageService _storageService;
+        private readonly HarvesterStatsService _statsService;
         private readonly EmbeddingClient _embeddingClient;
         private readonly ILogger<JiraSolutionHarvesterService> _logger;
         private readonly TimeSpan _interval;
@@ -33,20 +35,34 @@ namespace RecipeSearchWeb.Services
             IJiraClient jiraClient, 
             [FromKeyedServices("harvested-solutions")] BlobContainerClient blobContainer,
             JiraSolutionStorageService storageService,
+            HarvesterStatsService statsService,
             EmbeddingClient embeddingClient,
             ILogger<JiraSolutionHarvesterService> logger)
         {
             _jiraClient = jiraClient;
             _blobContainer = blobContainer;
             _storageService = storageService;
+            _statsService = statsService;
             _embeddingClient = embeddingClient;
             _logger = logger;
             _interval = TimeSpan.FromHours(6); // Harvest every 6 hours
+            
+            // Initialize static run state
+            HarvesterStatsService.UpdateRunState(s => {
+                s.IsConfigured = _jiraClient.IsConfigured;
+                s.HarvestInterval = _interval;
+            });
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             _logger.LogInformation("JiraSolutionHarvesterService started - Fase 4: Full integration with search");
+            
+            // Update state: service is running
+            HarvesterStatsService.UpdateRunState(s => {
+                s.IsRunning = true;
+                s.IsConfigured = _jiraClient.IsConfigured;
+            });
             
             // Wait a bit for other services to initialize
             await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
@@ -64,6 +80,11 @@ namespace RecipeSearchWeb.Services
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Failed to initialize storage containers - harvesting disabled");
+                    HarvesterStatsService.UpdateRunState(s => {
+                        s.IsRunning = false;
+                        s.LastRunSuccess = false;
+                        s.LastRunError = "Failed to initialize storage: " + ex.Message;
+                    });
                     return;
                 }
             }
@@ -75,17 +96,29 @@ namespace RecipeSearchWeb.Services
                 try
                 {
                     await HarvestSolutionsAsync(stoppingToken);
+                    
+                    // Update next scheduled harvest
+                    HarvesterStatsService.UpdateRunState(s => {
+                        s.NextScheduledHarvest = DateTime.UtcNow.Add(_interval);
+                    });
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Error in JiraSolutionHarvesterService");
+                    HarvesterStatsService.UpdateRunState(s => {
+                        s.LastRunSuccess = false;
+                        s.LastRunError = ex.Message;
+                    });
                 }
                 await Task.Delay(_interval, stoppingToken);
             }
+            
+            HarvesterStatsService.UpdateRunState(s => s.IsRunning = false);
         }
 
         private async Task HarvestSolutionsAsync(CancellationToken cancellationToken)
         {
+            var stopwatch = Stopwatch.StartNew();
             _logger.LogInformation("Harvesting Jira solutions...");
             
             // Get resolved tickets from last 7 days
@@ -118,6 +151,38 @@ namespace RecipeSearchWeb.Services
                 }
             }
             
+            stopwatch.Stop();
+            
+            // Record run statistics
+            var runRecord = new HarvesterRunRecord
+            {
+                Timestamp = DateTime.UtcNow,
+                TicketsFound = tickets.Count,
+                NewSolutions = newSolutions.Count,
+                Skipped = skipped,
+                NoSolution = noSolution,
+                Duration = stopwatch.Elapsed,
+                Success = true
+            };
+            
+            // Update in-memory state
+            HarvesterStatsService.UpdateRunState(s => {
+                s.LastHarvestTime = DateTime.UtcNow;
+                s.LastRunTicketsFound = tickets.Count;
+                s.LastRunNewSolutions = newSolutions.Count;
+                s.LastRunSkipped = skipped;
+                s.LastRunNoSolution = noSolution;
+                s.LastRunDuration = stopwatch.Elapsed;
+                s.LastRunSuccess = true;
+                s.LastRunError = null;
+                
+                // Update totals
+                s.TotalTicketsProcessed += tickets.Count - skipped;
+                s.TotalSolutionsHarvested += newSolutions.Count;
+                s.TotalTicketsSkipped += skipped;
+                s.TotalTicketsNoSolution += noSolution;
+            });
+            
             if (newSolutions.Count > 0)
             {
                 // Load existing solutions and merge
@@ -129,16 +194,19 @@ namespace RecipeSearchWeb.Services
                 await SaveProcessedTicketsAsync(cancellationToken);
                 
                 _logger.LogInformation(
-                    "Harvesting complete: {New} new solutions added (total: {Total}). {Skipped} skipped, {NoSolution} without solution.", 
-                    newSolutions.Count, existingSolutions.Count, skipped, noSolution);
+                    "Harvesting complete: {New} new solutions added (total: {Total}). {Skipped} skipped, {NoSolution} without solution. Duration: {Duration:F1}s", 
+                    newSolutions.Count, existingSolutions.Count, skipped, noSolution, stopwatch.Elapsed.TotalSeconds);
             }
             else
             {
                 await SaveProcessedTicketsAsync(cancellationToken);
                 _logger.LogInformation(
-                    "No new solutions found. {Skipped} skipped (already processed), {NoSolution} without solution.", 
-                    skipped, noSolution);
+                    "No new solutions found. {Skipped} skipped (already processed), {NoSolution} without solution. Duration: {Duration:F1}s", 
+                    skipped, noSolution, stopwatch.Elapsed.TotalSeconds);
             }
+            
+            // Record run in persistent history
+            await _statsService.RecordRunAsync(runRecord);
         }
 
         /// <summary>

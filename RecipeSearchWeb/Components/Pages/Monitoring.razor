@@ -1,7 +1,9 @@
 @page "/monitoring"
 @rendermode InteractiveServer
 @using RecipeSearchWeb.Services
+@using RecipeSearchWeb.Models
 @inject JiraMonitoringService MonitoringService
+@inject HarvesterStatsService HarvesterService
 @inject NavigationManager Navigation
 
 <PageTitle>Jira Monitoring - Operations One</PageTitle>
@@ -17,9 +19,19 @@
                 <span class="material-symbols-outlined">monitoring</span>
                 Jira Monitoring
             </h1>
-            <p class="md-page-subtitle">Real-time ticket statistics and trends</p>
+            <p class="md-page-subtitle">Real-time ticket statistics, trends, and harvester activity</p>
         </div>
         <div class="md-page-actions">
+            <div class="view-toggle">
+                <button class="@(activeTab == "tickets" ? "active" : "")" @onclick='() => activeTab = "tickets"'>
+                    <span class="material-symbols-outlined">confirmation_number</span>
+                    Tickets
+                </button>
+                <button class="@(activeTab == "harvester" ? "active" : "")" @onclick='() => activeTab = "harvester"'>
+                    <span class="material-symbols-outlined">agriculture</span>
+                    Harvester
+                </button>
+            </div>
             <button class="md-btn-outlined" @onclick="RefreshStats" disabled="@isLoading">
                 <span class="material-symbols-outlined @(isLoading ? "spinning" : "")">refresh</span>
                 @(isLoading ? "Loading..." : "Refresh")
@@ -27,113 +39,586 @@
         </div>
     </div>
 
-    @if (!MonitoringService.IsConfigured)
+    @if (activeTab == "tickets")
     {
-        <div class="md-alert md-alert-warning">
-            <span class="material-symbols-outlined">warning</span>
-            <div>
-                <strong>Jira not configured</strong>
-                <p>Please configure Jira connection settings (JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN) to enable monitoring.</p>
-            </div>
-        </div>
-    }
-    else if (stats == null && isLoading)
-    {
-        <div class="md-loading-container">
-            <div class="md-spinner-large"></div>
-            <p>Loading Jira statistics...</p>
-        </div>
-    }
-    else if (stats?.HasError == true)
-    {
-        <div class="md-alert md-alert-error">
-            <span class="material-symbols-outlined">error</span>
-            <div>
-                <strong>Error fetching Jira data</strong>
-                <p>@stats.ErrorMessage</p>
-            </div>
-        </div>
-    }
-    else if (stats != null)
-    {
-        @* KPI Cards Row *@
-        <div class="monitoring-kpi-grid">
-            <div class="monitoring-kpi-card kpi-created">
-                <div class="kpi-icon">
-                    <span class="material-symbols-outlined">add_circle</span>
-                </div>
-                <div class="kpi-content">
-                    <span class="kpi-value">@stats.TicketsCreatedToday</span>
-                    <span class="kpi-label">Created Today</span>
+        @* ==================== TICKETS TAB ==================== *@
+        @if (!MonitoringService.IsConfigured)
+        {
+            <div class="md-alert md-alert-warning">
+                <span class="material-symbols-outlined">warning</span>
+                <div>
+                    <strong>Jira not configured</strong>
+                    <p>Please configure Jira connection settings (JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN) to enable monitoring.</p>
                 </div>
             </div>
-            
-            <div class="monitoring-kpi-card kpi-resolved">
-                <div class="kpi-icon">
-                    <span class="material-symbols-outlined">check_circle</span>
-                </div>
-                <div class="kpi-content">
-                    <span class="kpi-value">@stats.TicketsResolvedToday</span>
-                    <span class="kpi-label">Resolved Today</span>
+        }
+        else if (stats == null && isLoading)
+        {
+            <div class="md-loading-container">
+                <div class="md-spinner-large"></div>
+                <p>Loading Jira statistics...</p>
+            </div>
+        }
+        else if (stats?.HasError == true)
+        {
+            <div class="md-alert md-alert-error">
+                <span class="material-symbols-outlined">error</span>
+                <div>
+                    <strong>Error fetching Jira data</strong>
+                    <p>@stats.ErrorMessage</p>
                 </div>
             </div>
-            
-            <div class="monitoring-kpi-card kpi-open">
-                <div class="kpi-icon">
-                    <span class="material-symbols-outlined">pending</span>
+        }
+        else if (stats != null)
+        {
+            @* KPI Cards Row *@
+            <div class="monitoring-kpi-grid">
+                <div class="monitoring-kpi-card kpi-created">
+                    <div class="kpi-icon">
+                        <span class="material-symbols-outlined">add_circle</span>
+                    </div>
+                    <div class="kpi-content">
+                        <span class="kpi-value">@stats.TicketsCreatedToday</span>
+                        <span class="kpi-label">Created Today</span>
+                    </div>
                 </div>
-                <div class="kpi-content">
-                    <span class="kpi-value">@stats.TicketsOpen</span>
-                    <span class="kpi-label">Open Tickets</span>
+                
+                <div class="monitoring-kpi-card kpi-resolved">
+                    <div class="kpi-icon">
+                        <span class="material-symbols-outlined">check_circle</span>
+                    </div>
+                    <div class="kpi-content">
+                        <span class="kpi-value">@stats.TicketsResolvedToday</span>
+                        <span class="kpi-label">Resolved Today</span>
+                    </div>
+                </div>
+                
+                <div class="monitoring-kpi-card kpi-open">
+                    <div class="kpi-icon">
+                        <span class="material-symbols-outlined">pending</span>
+                    </div>
+                    <div class="kpi-content">
+                        <span class="kpi-value">@stats.TicketsOpen</span>
+                        <span class="kpi-label">Open Tickets</span>
+                    </div>
+                </div>
+                
+                <div class="monitoring-kpi-card kpi-progress">
+                    <div class="kpi-icon">
+                        <span class="material-symbols-outlined">engineering</span>
+                    </div>
+                    <div class="kpi-content">
+                        <span class="kpi-value">@stats.TicketsInProgress</span>
+                        <span class="kpi-label">In Progress</span>
+                    </div>
                 </div>
             </div>
-            
-            <div class="monitoring-kpi-card kpi-progress">
-                <div class="kpi-icon">
-                    <span class="material-symbols-outlined">engineering</span>
-                </div>
-                <div class="kpi-content">
-                    <span class="kpi-value">@stats.TicketsInProgress</span>
-                    <span class="kpi-label">In Progress</span>
-                </div>
-            </div>
-        </div>
 
-        @* Two Column Layout *@
-        <div class="monitoring-grid-2col">
-            @* Trend Chart *@
+            @* Two Column Layout *@
+            <div class="monitoring-grid-2col">
+                @* Trend Chart *@
+                <div class="md-card">
+                    <div class="md-card-header">
+                        <h3>
+                            <span class="material-symbols-outlined">show_chart</span>
+                            7-Day Trend
+                        </h3>
+                    </div>
+                    <div class="monitoring-chart">
+                        @if (stats.TrendData.Any())
+                        {
+                            <div class="chart-bars">
+                                @foreach (var point in stats.TrendData)
+                                {
+                                    var maxValue = Math.Max(stats.TrendData.Max(p => p.Created), stats.TrendData.Max(p => p.Resolved));
+                                    maxValue = maxValue == 0 ? 1 : maxValue;
+                                    var createdHeight = (point.Created * 100.0 / maxValue);
+                                    var resolvedHeight = (point.Resolved * 100.0 / maxValue);
+                                    
+                                    <div class="chart-bar-group">
+                                        <div class="chart-bars-container">
+                                            <div class="chart-bar chart-bar-created" style="height: @(createdHeight)%;" 
+                                                 title="Created: @point.Created">
+                                                @if (point.Created > 0)
+                                                {
+                                                    <span class="bar-value">@point.Created</span>
+                                                }
+                                            </div>
+                                            <div class="chart-bar chart-bar-resolved" style="height: @(resolvedHeight)%;"
+                                                 title="Resolved: @point.Resolved">
+                                                @if (point.Resolved > 0)
+                                                {
+                                                    <span class="bar-value">@point.Resolved</span>
+                                                }
+                                            </div>
+                                        </div>
+                                        <span class="chart-label">@point.DayLabel</span>
+                                    </div>
+                                }
+                            </div>
+                            <div class="chart-legend">
+                                <span class="legend-item">
+                                    <span class="legend-color legend-created"></span>
+                                    Created
+                                </span>
+                                <span class="legend-item">
+                                    <span class="legend-color legend-resolved"></span>
+                                    Resolved
+                                </span>
+                            </div>
+                        }
+                        else
+                        {
+                            <p class="no-data">No trend data available</p>
+                        }
+                    </div>
+                </div>
+
+                @* Performance Metrics *@
+                <div class="md-card">
+                    <div class="md-card-header">
+                        <h3>
+                            <span class="material-symbols-outlined">speed</span>
+                            Performance
+                        </h3>
+                    </div>
+                    <div class="monitoring-metrics">
+                        <div class="metric-item">
+                            <span class="metric-label">Avg. Resolution Time</span>
+                            <span class="metric-value">
+                                @if (stats.AverageResolutionHours > 0)
+                                {
+                                    @if (stats.AverageResolutionHours >= 24)
+                                    {
+                                        <text>@(Math.Round(stats.AverageResolutionHours / 24, 1)) days</text>
+                                    }
+                                    else
+                                    {
+                                        <text>@stats.AverageResolutionHours hrs</text>
+                                    }
+                                }
+                                else
+                                {
+                                    <text>N/A</text>
+                                }
+                            </span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">Resolution Rate Today</span>
+                            <span class="metric-value">
+                                @if (stats.TicketsCreatedToday > 0)
+                                {
+                                    var rate = (stats.TicketsResolvedToday * 100.0 / stats.TicketsCreatedToday);
+                                    <text>@(Math.Round(rate, 0))%</text>
+                                }
+                                else
+                                {
+                                    <text>N/A</text>
+                                }
+                            </span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">Backlog</span>
+                            <span class="metric-value @(stats.TicketsOpen > 50 ? "metric-warning" : "")">
+                                @stats.TicketsOpen tickets
+                            </span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">Last Updated</span>
+                            <span class="metric-value metric-small">
+                                @stats.LastUpdated.ToLocalTime().ToString("HH:mm:ss")
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            @* Recent Tickets Table with Search and Filters *@
             <div class="md-card">
                 <div class="md-card-header">
                     <h3>
-                        <span class="material-symbols-outlined">show_chart</span>
-                        7-Day Trend
+                        <span class="material-symbols-outlined">list_alt</span>
+                        Recent Tickets (Today) 
+                        <span class="ticket-count">@(stats.RecentTickets.Count) tickets</span>
                     </h3>
                 </div>
-                <div class="monitoring-chart">
-                    @if (stats.TrendData.Any())
-                    {
-                        <div class="chart-bars">
-                            @foreach (var point in stats.TrendData)
+                
+                @* Search and Filters *@
+                <div class="monitoring-filters">
+                    <div class="filter-row">
+                        <div class="search-box">
+                            <span class="material-symbols-outlined">search</span>
+                            <input type="text" @bind="searchQuery" @bind:event="oninput" 
+                                   placeholder="Search by key, summary, or assignee..." />
+                        </div>
+                        <div class="filter-group">
+                            <label>Reporter:</label>
+                            <select @bind="reporterFilter">
+                                <option value="">All Reporters</option>
+                                @foreach (var reporter in GetUniqueReporters())
+                                {
+                                    <option value="@reporter">@reporter</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label>Status:</label>
+                            <select @bind="statusFilter">
+                                <option value="">All Status</option>
+                                @foreach (var status in GetUniqueStatuses())
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label>Priority:</label>
+                            <select @bind="priorityFilter">
+                                <option value="">All Priorities</option>
+                                @foreach (var priority in GetUniquePriorities())
+                                {
+                                    <option value="@priority">@priority</option>
+                                }
+                            </select>
+                        </div>
+                        <button class="md-btn-text" @onclick="ClearFilters">
+                            <span class="material-symbols-outlined">filter_alt_off</span>
+                            Clear
+                        </button>
+                    </div>
+                </div>
+                
+                @if (GetFilteredTickets().Any())
+                {
+                    <div class="monitoring-table-container">
+                        <table class="monitoring-table">
+                            <thead>
+                                <tr>
+                                    <th>Key</th>
+                                    <th>Summary</th>
+                                    <th>Status</th>
+                                    <th>Priority</th>
+                                    <th>Reporter</th>
+                                    <th>Assignee</th>
+                                    <th>Created</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var ticket in GetFilteredTickets())
+                                {
+                                    <tr>
+                                        <td>
+                                            <a href="@GetJiraTicketUrl(ticket.Key)" target="_blank" class="ticket-link">
+                                                @ticket.Key
+                                            </a>
+                                        </td>
+                                        <td class="ticket-summary" title="@ticket.Summary">@TruncateSummary(ticket.Summary)</td>
+                                        <td>
+                                            <span class="status-badge @GetStatusClass(ticket.Status)">
+                                                @ticket.Status
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span class="priority-badge @GetPriorityClass(ticket.Priority)">
+                                                @ticket.Priority
+                                            </span>
+                                        </td>
+                                        <td class="reporter">@(ticket.Reporter ?? "Unknown")</td>
+                                        <td class="assignee">@(ticket.Assignee ?? "Unassigned")</td>
+                                        <td class="created-time">@ticket.Created.ToLocalTime().ToString("HH:mm")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="table-footer">
+                        <span class="results-count">Showing @GetFilteredTickets().Count() of @stats.RecentTickets.Count tickets</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="no-tickets">
+                        <span class="material-symbols-outlined">inbox</span>
+                        @if (!string.IsNullOrEmpty(searchQuery) || !string.IsNullOrEmpty(reporterFilter) || !string.IsNullOrEmpty(statusFilter) || !string.IsNullOrEmpty(priorityFilter))
+                        {
+                            <p>No tickets match your filters</p>
+                        }
+                        else
+                        {
+                            <p>No tickets created today yet</p>
+                        }
+                    </div>
+                }
+            </div>
+        }
+    }
+    else
+    {
+        @* ==================== HARVESTER TAB ==================== *@
+        @if (harvesterStats == null && isLoading)
+        {
+            <div class="md-loading-container">
+                <div class="md-spinner-large"></div>
+                <p>Loading harvester statistics...</p>
+            </div>
+        }
+        else if (harvesterStats != null)
+        {
+            @* Harvester Status Banner *@
+            <div class="harvester-status-banner @(harvesterStats.IsRunning ? "running" : "stopped")">
+                <div class="status-indicator">
+                    <span class="material-symbols-outlined @(harvesterStats.IsRunning ? "pulse" : "")">
+                        @(harvesterStats.IsRunning ? "sensors" : "sensors_off")
+                    </span>
+                    <div class="status-text">
+                        <strong>Harvester @(harvesterStats.IsRunning ? "Running" : "Stopped")</strong>
+                        @if (harvesterStats.LastHarvestTime.HasValue)
+                        {
+                            <span>Last run: @harvesterStats.LastHarvestTime.Value.ToLocalTime().ToString("dd/MM HH:mm")</span>
+                        }
+                    </div>
+                </div>
+                @if (harvesterStats.NextScheduledHarvest.HasValue && harvesterStats.IsRunning)
+                {
+                    <div class="next-run">
+                        <span class="material-symbols-outlined">schedule</span>
+                        Next: @harvesterStats.NextScheduledHarvest.Value.ToLocalTime().ToString("HH:mm")
+                    </div>
+                }
+            </div>
+
+            @* Harvester KPIs *@
+            <div class="monitoring-kpi-grid">
+                <div class="monitoring-kpi-card kpi-harvested">
+                    <div class="kpi-icon">
+                        <span class="material-symbols-outlined">inventory_2</span>
+                    </div>
+                    <div class="kpi-content">
+                        <span class="kpi-value">@harvesterStats.SolutionsInStorage</span>
+                        <span class="kpi-label">Solutions Stored</span>
+                    </div>
+                </div>
+                
+                <div class="monitoring-kpi-card kpi-processed">
+                    <div class="kpi-icon">
+                        <span class="material-symbols-outlined">task_alt</span>
+                    </div>
+                    <div class="kpi-content">
+                        <span class="kpi-value">@harvesterStats.TotalTicketsProcessed</span>
+                        <span class="kpi-label">Tickets Processed</span>
+                    </div>
+                </div>
+                
+                <div class="monitoring-kpi-card kpi-rate">
+                    <div class="kpi-icon">
+                        <span class="material-symbols-outlined">percent</span>
+                    </div>
+                    <div class="kpi-content">
+                        <span class="kpi-value">
+                            @if (harvesterStats.TotalTicketsProcessed > 0)
                             {
-                                var maxValue = Math.Max(stats.TrendData.Max(p => p.Created), stats.TrendData.Max(p => p.Resolved));
+                                @(Math.Round(harvesterStats.TotalSolutionsHarvested * 100.0 / harvesterStats.TotalTicketsProcessed))@("%")
+                            }
+                            else
+                            {
+                                <text>N/A</text>
+                            }
+                        </span>
+                        <span class="kpi-label">Success Rate</span>
+                    </div>
+                </div>
+                
+                <div class="monitoring-kpi-card kpi-storage">
+                    <div class="kpi-icon">
+                        <span class="material-symbols-outlined">cloud_done</span>
+                    </div>
+                    <div class="kpi-content">
+                        <span class="kpi-value">@harvesterStats.StorageSizeFormatted</span>
+                        <span class="kpi-label">Storage Used</span>
+                    </div>
+                </div>
+            </div>
+
+            @* Two Column Layout for Harvester *@
+            <div class="monitoring-grid-2col">
+                @* Last Run Details *@
+                <div class="md-card">
+                    <div class="md-card-header">
+                        <h3>
+                            <span class="material-symbols-outlined">history</span>
+                            Last Harvest Run
+                        </h3>
+                        @if (harvesterStats.LastRunSuccess)
+                        {
+                            <span class="status-badge status-done">Success</span>
+                        }
+                        else if (!string.IsNullOrEmpty(harvesterStats.LastRunError))
+                        {
+                            <span class="status-badge status-error">Error</span>
+                        }
+                    </div>
+                    <div class="monitoring-metrics">
+                        <div class="metric-item">
+                            <span class="metric-label">Tickets Found</span>
+                            <span class="metric-value">@harvesterStats.LastRunTicketsFound</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">New Solutions</span>
+                            <span class="metric-value metric-success">@harvesterStats.LastRunNewSolutions</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">Skipped (Already Processed)</span>
+                            <span class="metric-value">@harvesterStats.LastRunSkipped</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">No Solution Found</span>
+                            <span class="metric-value metric-warning">@harvesterStats.LastRunNoSolution</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="metric-label">Duration</span>
+                            <span class="metric-value metric-small">
+                                @if (harvesterStats.LastRunDuration.HasValue)
+                                {
+                                    @($"{harvesterStats.LastRunDuration.Value.TotalSeconds:F1}s")
+                                }
+                                else
+                                {
+                                    <text>N/A</text>
+                                }
+                            </span>
+                        </div>
+                        @if (!string.IsNullOrEmpty(harvesterStats.LastRunError))
+                        {
+                            <div class="metric-item error-item">
+                                <span class="metric-label">Error</span>
+                                <span class="metric-value metric-error">@harvesterStats.LastRunError</span>
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                @* Solutions by System *@
+                <div class="md-card">
+                    <div class="md-card-header">
+                        <h3>
+                            <span class="material-symbols-outlined">category</span>
+                            Solutions by System
+                        </h3>
+                    </div>
+                    <div class="system-breakdown">
+                        @if (harvesterStats.SolutionsBySystem.Any())
+                        {
+                            @foreach (var system in harvesterStats.SolutionsBySystem.OrderByDescending(s => s.Value))
+                            {
+                                var percentage = harvesterStats.SolutionsInStorage > 0 
+                                    ? (system.Value * 100.0 / harvesterStats.SolutionsInStorage) 
+                                    : 0;
+                                <div class="system-item">
+                                    <div class="system-header">
+                                        <span class="system-name">@system.Key</span>
+                                        <span class="system-count">@system.Value</span>
+                                    </div>
+                                    <div class="system-bar">
+                                        <div class="system-bar-fill" style="width: @percentage%"></div>
+                                    </div>
+                                </div>
+                            }
+                        }
+                        else
+                        {
+                            <p class="no-data">No solutions harvested yet</p>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            @* Recent Harvested Solutions *@
+            <div class="md-card">
+                <div class="md-card-header">
+                    <h3>
+                        <span class="material-symbols-outlined">library_books</span>
+                        Recently Harvested Solutions
+                    </h3>
+                </div>
+                @if (harvesterStats.RecentSolutions.Any())
+                {
+                    <div class="monitoring-table-container">
+                        <table class="monitoring-table harvester-table">
+                            <thead>
+                                <tr>
+                                    <th>Ticket</th>
+                                    <th>Title</th>
+                                    <th>System</th>
+                                    <th>Keywords</th>
+                                    <th>Embedding</th>
+                                    <th>Harvested</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var solution in harvesterStats.RecentSolutions)
+                                {
+                                    <tr>
+                                        <td>
+                                            <a href="@solution.JiraUrl" target="_blank" class="ticket-link">
+                                                @solution.TicketId
+                                            </a>
+                                        </td>
+                                        <td class="ticket-summary" title="@solution.Title">@solution.Title</td>
+                                        <td>
+                                            <span class="system-badge">@solution.System</span>
+                                        </td>
+                                        <td class="keywords-count">@solution.KeywordCount</td>
+                                        <td>
+                                            @if (solution.HasEmbedding)
+                                            {
+                                                <span class="material-symbols-outlined embedding-ok">check_circle</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="material-symbols-outlined embedding-missing">cancel</span>
+                                            }
+                                        </td>
+                                        <td class="created-time">@solution.HarvestedDate.ToLocalTime().ToString("dd/MM HH:mm")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+                else
+                {
+                    <div class="no-tickets">
+                        <span class="material-symbols-outlined">inventory_2</span>
+                        <p>No solutions harvested yet. The harvester runs every @harvesterStats.HarvestInterval.TotalHours hours.</p>
+                    </div>
+                }
+            </div>
+
+            @* Harvester Trend Chart *@
+            @if (harvesterStats.TrendData.Any(t => t.Harvested > 0))
+            {
+                <div class="md-card">
+                    <div class="md-card-header">
+                        <h3>
+                            <span class="material-symbols-outlined">show_chart</span>
+                            7-Day Harvesting Activity
+                        </h3>
+                    </div>
+                    <div class="monitoring-chart">
+                        <div class="chart-bars">
+                            @foreach (var point in harvesterStats.TrendData)
+                            {
+                                var maxValue = harvesterStats.TrendData.Max(p => p.Harvested);
                                 maxValue = maxValue == 0 ? 1 : maxValue;
-                                var createdHeight = (point.Created * 100.0 / maxValue);
-                                var resolvedHeight = (point.Resolved * 100.0 / maxValue);
+                                var harvestedHeight = (point.Harvested * 100.0 / maxValue);
                                 
                                 <div class="chart-bar-group">
-                                    <div class="chart-bars-container">
-                                        <div class="chart-bar chart-bar-created" style="height: @(createdHeight)%;" 
-                                             title="Created: @point.Created">
-                                            @if (point.Created > 0)
+                                    <div class="chart-bars-container single-bar">
+                                        <div class="chart-bar chart-bar-harvested" style="height: @(harvestedHeight)%;" 
+                                             title="Harvested: @point.Harvested">
+                                            @if (point.Harvested > 0)
                                             {
-                                                <span class="bar-value">@point.Created</span>
-                                            }
-                                        </div>
-                                        <div class="chart-bar chart-bar-resolved" style="height: @(resolvedHeight)%;"
-                                             title="Resolved: @point.Resolved">
-                                            @if (point.Resolved > 0)
-                                            {
-                                                <span class="bar-value">@point.Resolved</span>
+                                                <span class="bar-value">@point.Harvested</span>
                                             }
                                         </div>
                                     </div>
@@ -143,204 +628,257 @@
                         </div>
                         <div class="chart-legend">
                             <span class="legend-item">
-                                <span class="legend-color legend-created"></span>
-                                Created
-                            </span>
-                            <span class="legend-item">
-                                <span class="legend-color legend-resolved"></span>
-                                Resolved
+                                <span class="legend-color legend-harvested"></span>
+                                Solutions Harvested
                             </span>
                         </div>
-                    }
-                    else
-                    {
-                        <p class="no-data">No trend data available</p>
-                    }
-                </div>
-            </div>
-
-            @* Performance Metrics *@
-            <div class="md-card">
-                <div class="md-card-header">
-                    <h3>
-                        <span class="material-symbols-outlined">speed</span>
-                        Performance
-                    </h3>
-                </div>
-                <div class="monitoring-metrics">
-                    <div class="metric-item">
-                        <span class="metric-label">Avg. Resolution Time</span>
-                        <span class="metric-value">
-                            @if (stats.AverageResolutionHours > 0)
-                            {
-                                @if (stats.AverageResolutionHours >= 24)
-                                {
-                                    <text>@(Math.Round(stats.AverageResolutionHours / 24, 1)) days</text>
-                                }
-                                else
-                                {
-                                    <text>@stats.AverageResolutionHours hrs</text>
-                                }
-                            }
-                            else
-                            {
-                                <text>N/A</text>
-                            }
-                        </span>
                     </div>
-                    <div class="metric-item">
-                        <span class="metric-label">Resolution Rate Today</span>
-                        <span class="metric-value">
-                            @if (stats.TicketsCreatedToday > 0)
-                            {
-                                var rate = (stats.TicketsResolvedToday * 100.0 / stats.TicketsCreatedToday);
-                                <text>@(Math.Round(rate, 0))%</text>
-                            }
-                            else
-                            {
-                                <text>N/A</text>
-                            }
-                        </span>
-                    </div>
-                    <div class="metric-item">
-                        <span class="metric-label">Backlog</span>
-                        <span class="metric-value @(stats.TicketsOpen > 50 ? "metric-warning" : "")">
-                            @stats.TicketsOpen tickets
-                        </span>
-                    </div>
-                    <div class="metric-item">
-                        <span class="metric-label">Last Updated</span>
-                        <span class="metric-value metric-small">
-                            @stats.LastUpdated.ToLocalTime().ToString("HH:mm:ss")
-                        </span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        @* Recent Tickets Table with Search and Filters *@
-        <div class="md-card">
-            <div class="md-card-header">
-                <h3>
-                    <span class="material-symbols-outlined">list_alt</span>
-                    Recent Tickets (Today) 
-                    <span class="ticket-count">@(stats.RecentTickets.Count) tickets</span>
-                </h3>
-            </div>
-            
-            @* Search and Filters *@
-            <div class="monitoring-filters">
-                <div class="filter-row">
-                    <div class="search-box">
-                        <span class="material-symbols-outlined">search</span>
-                        <input type="text" @bind="searchQuery" @bind:event="oninput" 
-                               placeholder="Search by key, summary, or assignee..." />
-                    </div>
-                    <div class="filter-group">
-                        <label>Reporter:</label>
-                        <select @bind="reporterFilter">
-                            <option value="">All Reporters</option>
-                            @foreach (var reporter in GetUniqueReporters())
-                            {
-                                <option value="@reporter">@reporter</option>
-                            }
-                        </select>
-                    </div>
-                    <div class="filter-group">
-                        <label>Status:</label>
-                        <select @bind="statusFilter">
-                            <option value="">All Status</option>
-                            @foreach (var status in GetUniqueStatuses())
-                            {
-                                <option value="@status">@status</option>
-                            }
-                        </select>
-                    </div>
-                    <div class="filter-group">
-                        <label>Priority:</label>
-                        <select @bind="priorityFilter">
-                            <option value="">All Priorities</option>
-                            @foreach (var priority in GetUniquePriorities())
-                            {
-                                <option value="@priority">@priority</option>
-                            }
-                        </select>
-                    </div>
-                    <button class="md-btn-text" @onclick="ClearFilters">
-                        <span class="material-symbols-outlined">filter_alt_off</span>
-                        Clear
-                    </button>
-                </div>
-            </div>
-            
-            @if (GetFilteredTickets().Any())
-            {
-                <div class="monitoring-table-container">
-                    <table class="monitoring-table">
-                        <thead>
-                            <tr>
-                                <th>Key</th>
-                                <th>Summary</th>
-                                <th>Status</th>
-                                <th>Priority</th>
-                                <th>Reporter</th>
-                                <th>Assignee</th>
-                                <th>Created</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var ticket in GetFilteredTickets())
-                            {
-                                <tr>
-                                    <td>
-                                        <a href="@GetJiraTicketUrl(ticket.Key)" target="_blank" class="ticket-link">
-                                            @ticket.Key
-                                        </a>
-                                    </td>
-                                    <td class="ticket-summary" title="@ticket.Summary">@TruncateSummary(ticket.Summary)</td>
-                                    <td>
-                                        <span class="status-badge @GetStatusClass(ticket.Status)">
-                                            @ticket.Status
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <span class="priority-badge @GetPriorityClass(ticket.Priority)">
-                                            @ticket.Priority
-                                        </span>
-                                    </td>
-                                    <td class="reporter">@(ticket.Reporter ?? "Unknown")</td>
-                                    <td class="assignee">@(ticket.Assignee ?? "Unassigned")</td>
-                                    <td class="created-time">@ticket.Created.ToLocalTime().ToString("HH:mm")</td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
-                </div>
-                <div class="table-footer">
-                    <span class="results-count">Showing @GetFilteredTickets().Count() of @stats.RecentTickets.Count tickets</span>
                 </div>
             }
-            else
-            {
-                <div class="no-tickets">
-                    <span class="material-symbols-outlined">inbox</span>
-                    @if (!string.IsNullOrEmpty(searchQuery) || !string.IsNullOrEmpty(reporterFilter) || !string.IsNullOrEmpty(statusFilter) || !string.IsNullOrEmpty(priorityFilter))
-                    {
-                        <p>No tickets match your filters</p>
-                    }
-                    else
-                    {
-                        <p>No tickets created today yet</p>
-                    }
+        }
+        else
+        {
+            <div class="md-alert md-alert-info">
+                <span class="material-symbols-outlined">info</span>
+                <div>
+                    <strong>Harvester Not Active</strong>
+                    <p>The Jira Solution Harvester service is not running or has not collected any data yet.</p>
                 </div>
-            }
-        </div>
+            </div>
+        }
     }
 </div>
 
+<style>
+    /* Tab Toggle Styles */
+    .view-toggle {
+        display: flex;
+        gap: 0;
+        background: var(--md-sys-color-surface-container);
+        border-radius: 8px;
+        padding: 4px;
+        margin-right: 12px;
+    }
+    
+    .view-toggle button {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 16px;
+        border: none;
+        background: transparent;
+        color: var(--md-sys-color-on-surface-variant);
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.875rem;
+        font-weight: 500;
+        transition: all 0.2s ease;
+    }
+    
+    .view-toggle button:hover {
+        background: var(--md-sys-color-surface-container-high);
+    }
+    
+    .view-toggle button.active {
+        background: var(--md-sys-color-primary);
+        color: var(--md-sys-color-on-primary);
+    }
+    
+    .view-toggle button .material-symbols-outlined {
+        font-size: 18px;
+    }
+    
+    /* Harvester Status Banner */
+    .harvester-status-banner {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 16px 20px;
+        border-radius: 12px;
+        margin-bottom: 24px;
+    }
+    
+    .harvester-status-banner.running {
+        background: linear-gradient(135deg, rgba(76, 175, 80, 0.15), rgba(76, 175, 80, 0.05));
+        border: 1px solid rgba(76, 175, 80, 0.3);
+    }
+    
+    .harvester-status-banner.stopped {
+        background: linear-gradient(135deg, rgba(158, 158, 158, 0.15), rgba(158, 158, 158, 0.05));
+        border: 1px solid rgba(158, 158, 158, 0.3);
+    }
+    
+    .status-indicator {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    
+    .status-indicator .material-symbols-outlined {
+        font-size: 32px;
+    }
+    
+    .harvester-status-banner.running .status-indicator .material-symbols-outlined {
+        color: #4caf50;
+    }
+    
+    .harvester-status-banner.stopped .status-indicator .material-symbols-outlined {
+        color: #9e9e9e;
+    }
+    
+    .status-text {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+    
+    .status-text strong {
+        font-size: 1rem;
+        color: var(--md-sys-color-on-surface);
+    }
+    
+    .status-text span {
+        font-size: 0.85rem;
+        color: var(--md-sys-color-on-surface-variant);
+    }
+    
+    .next-run {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.9rem;
+        color: var(--md-sys-color-on-surface-variant);
+    }
+    
+    .pulse {
+        animation: pulse 2s infinite;
+    }
+    
+    @@keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
+    
+    /* Harvester-specific KPI colors */
+    .kpi-harvested { border-left-color: #7c4dff; }
+    .kpi-harvested .kpi-icon { background: rgba(124, 77, 255, 0.12); }
+    .kpi-harvested .kpi-icon .material-symbols-outlined { color: #7c4dff; }
+    
+    .kpi-processed { border-left-color: #00bcd4; }
+    .kpi-processed .kpi-icon { background: rgba(0, 188, 212, 0.12); }
+    .kpi-processed .kpi-icon .material-symbols-outlined { color: #00bcd4; }
+    
+    .kpi-rate { border-left-color: #ff9800; }
+    .kpi-rate .kpi-icon { background: rgba(255, 152, 0, 0.12); }
+    .kpi-rate .kpi-icon .material-symbols-outlined { color: #ff9800; }
+    
+    .kpi-storage { border-left-color: #607d8b; }
+    .kpi-storage .kpi-icon { background: rgba(96, 125, 139, 0.12); }
+    .kpi-storage .kpi-icon .material-symbols-outlined { color: #607d8b; }
+    
+    /* System breakdown styles */
+    .system-breakdown {
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+    
+    .system-item {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+    
+    .system-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    
+    .system-name {
+        font-weight: 500;
+        color: var(--md-sys-color-on-surface);
+    }
+    
+    .system-count {
+        font-size: 0.9rem;
+        color: var(--md-sys-color-on-surface-variant);
+        font-weight: 600;
+    }
+    
+    .system-bar {
+        height: 8px;
+        background: var(--md-sys-color-surface-container);
+        border-radius: 4px;
+        overflow: hidden;
+    }
+    
+    .system-bar-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #7c4dff, #b388ff);
+        border-radius: 4px;
+        transition: width 0.5s ease;
+    }
+    
+    /* Metric value variants */
+    .metric-success { color: #4caf50 !important; }
+    .metric-warning { color: #ff9800 !important; }
+    .metric-error { color: #f44336 !important; }
+    
+    .error-item {
+        background: rgba(244, 67, 54, 0.08);
+        border-radius: 8px;
+        padding: 12px;
+    }
+    
+    /* System badge */
+    .system-badge {
+        display: inline-block;
+        padding: 4px 10px;
+        background: var(--md-sys-color-surface-container-high);
+        border-radius: 12px;
+        font-size: 0.8rem;
+        font-weight: 500;
+    }
+    
+    /* Embedding icons */
+    .embedding-ok { color: #4caf50; font-size: 20px; }
+    .embedding-missing { color: #9e9e9e; font-size: 20px; }
+    
+    /* Harvester chart bar color */
+    .chart-bar-harvested {
+        background: linear-gradient(180deg, #7c4dff 0%, #b388ff 100%);
+    }
+    
+    .legend-harvested {
+        background: #7c4dff;
+    }
+    
+    .single-bar {
+        justify-content: center;
+    }
+    
+    .status-error {
+        background: rgba(244, 67, 54, 0.12);
+        color: #f44336;
+    }
+    
+    .keywords-count {
+        text-align: center;
+        font-weight: 500;
+    }
+    
+    .harvester-table .ticket-summary {
+        max-width: 300px;
+    }
+</style>
+
 @code {
     private JiraStats? stats;
+    private HarvesterStats? harvesterStats;
     private bool isLoading = true;
+    private string activeTab = "tickets";
     private string? jiraBaseUrl;
     
     // Search and filter state
@@ -359,7 +897,14 @@
         isLoading = true;
         StateHasChanged();
         
-        stats = await MonitoringService.GetStatsAsync();
+        // Load both in parallel
+        var ticketStatsTask = MonitoringService.GetStatsAsync();
+        var harvesterStatsTask = HarvesterService.GetStatsAsync();
+        
+        await Task.WhenAll(ticketStatsTask, harvesterStatsTask);
+        
+        stats = await ticketStatsTask;
+        harvesterStats = await harvesterStatsTask;
         
         isLoading = false;
         StateHasChanged();
@@ -370,7 +915,14 @@
         isLoading = true;
         StateHasChanged();
         
-        stats = await MonitoringService.GetStatsAsync(forceRefresh: true);
+        if (activeTab == "tickets")
+        {
+            stats = await MonitoringService.GetStatsAsync(forceRefresh: true);
+        }
+        else
+        {
+            harvesterStats = await HarvesterService.GetStatsAsync();
+        }
         
         isLoading = false;
         StateHasChanged();
@@ -383,7 +935,6 @@
 
     private string GetJiraTicketUrl(string ticketKey)
     {
-        // Get base URL from configuration or use default
         return $"https://grupoantolin.atlassian.net/browse/{ticketKey}";
     }
 
@@ -417,14 +968,12 @@
         };
     }
     
-    // Filter methods
     private IEnumerable<JiraTicketSummary> GetFilteredTickets()
     {
         if (stats?.RecentTickets == null) return Enumerable.Empty<JiraTicketSummary>();
         
         var filtered = stats.RecentTickets.AsEnumerable();
         
-        // Apply search
         if (!string.IsNullOrWhiteSpace(searchQuery))
         {
             var query = searchQuery.ToLowerInvariant();
@@ -435,23 +984,14 @@
                 (t.Reporter?.ToLowerInvariant().Contains(query) ?? false));
         }
         
-        // Apply reporter filter
         if (!string.IsNullOrEmpty(reporterFilter))
-        {
             filtered = filtered.Where(t => t.Reporter == reporterFilter);
-        }
         
-        // Apply status filter
         if (!string.IsNullOrEmpty(statusFilter))
-        {
             filtered = filtered.Where(t => t.Status == statusFilter);
-        }
         
-        // Apply priority filter
         if (!string.IsNullOrEmpty(priorityFilter))
-        {
             filtered = filtered.Where(t => t.Priority == priorityFilter);
-        }
         
         return filtered;
     }
@@ -469,19 +1009,13 @@
     private IEnumerable<string> GetUniqueStatuses()
     {
         if (stats?.RecentTickets == null) return Enumerable.Empty<string>();
-        return stats.RecentTickets
-            .Select(t => t.Status)
-            .Distinct()
-            .OrderBy(s => s);
+        return stats.RecentTickets.Select(t => t.Status).Distinct().OrderBy(s => s);
     }
     
     private IEnumerable<string> GetUniquePriorities()
     {
         if (stats?.RecentTickets == null) return Enumerable.Empty<string>();
-        return stats.RecentTickets
-            .Select(t => t.Priority)
-            .Distinct()
-            .OrderBy(p => p);
+        return stats.RecentTickets.Select(t => t.Priority).Distinct().OrderBy(p => p);
     }
     
     private void ClearFilters()

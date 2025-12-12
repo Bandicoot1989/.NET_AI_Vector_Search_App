@@ -50,8 +50,8 @@
         }
     </div>
 
-    <div class="md-search-container">
-        <div class="md-search-box">
+    <div class="md-search-container md-search-vertical">
+        <div class="md-search-box md-search-box-full">
             <span class="material-symbols-outlined md-search-icon">search</span>
             <input 
                 type="text" 
@@ -59,25 +59,31 @@
                 @bind:event="oninput"
                 @onkeyup="HandleKeyPress"
                 placeholder="What do you need? (e.g., 'backup files', 'monitor system', 'find large files')" 
-                class="md-search-input" />
+                class="md-search-input"
+                aria-label="Search scripts"
+                aria-busy="@isSearching"
+                disabled="@isSearching" />
             @if (!string.IsNullOrWhiteSpace(searchQuery))
             {
-                <button class="md-search-clear" @onclick="ClearSearch">
+                <button class="md-search-clear" @onclick="ClearSearch" aria-label="Clear search">
                     <span class="material-symbols-outlined">close</span>
                 </button>
             }
         </div>
-        <button class="md-btn-filled" style="margin-left: 12px; height: 56px;" @onclick="SearchScripts" disabled="@isSearching">
-            @if (isSearching)
-            {
-                <span class="material-symbols-outlined" style="font-size: 18px; animation: spin 1s linear infinite;">sync</span>
-                <span>Searching...</span>
-            }
-            else
-            {
-                <span>Search Scripts</span>
-            }
-        </button>
+        <div class="md-search-actions">
+            <button class="md-btn-filled md-btn-search" @onclick="SearchScripts" disabled="@isSearching">
+                @if (isSearching)
+                {
+                    <span class="material-symbols-outlined md-spinner-icon">sync</span>
+                    <span>Searching...</span>
+                }
+                else
+                {
+                    <span class="material-symbols-outlined md-btn-icon">search</span>
+                    <span>Search Scripts</span>
+                }
+            </button>
+        </div>
     </div>
 
     @* Category Filters - Material Design 3 *@
@@ -225,7 +231,16 @@
                         <span class="material-symbols-outlined" style="font-size: 16px; vertical-align: middle;">code</span>
                         PowerShell Code
                     </label>
-                    <div class="md-code-block">@selectedScript.Code</div>
+                    <div class="ps-code-container">
+                        <div class="ps-code-header">
+                            <span class="ps-code-lang">PowerShell</span>
+                            <button class="ps-code-copy" @onclick="CopyCode" @onclick:stopPropagation="true">
+                                <span class="material-symbols-outlined">content_copy</span>
+                                Copy
+                            </button>
+                        </div>
+                        <pre class="ps-code-block"><code>@FormatPowerShellCode(selectedScript.Code)</code></pre>
+                    </div>
                 </div>
             </div>
             
@@ -333,6 +348,12 @@
 
     private async Task HandleKeyPress(KeyboardEventArgs e)
     {
+        if (e.Key == "Escape")
+        {
+            ClearSearch();
+            return;
+        }
+        
         if (e.Key == "Enter")
         {
             await SearchScripts();
@@ -392,6 +413,31 @@
     private void LoadFavorites()
     {
         // Load from local storage in real implementation
+    }
+
+    /// <summary>
+    /// Format PowerShell code with proper line breaks and indentation
+    /// </summary>
+    private MarkupString FormatPowerShellCode(string code)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+            return new MarkupString("");
+        
+        // Replace common separators with line breaks for better readability
+        var formatted = code
+            .Replace("; ", ";\n")
+            .Replace("{ ", "{\n    ")
+            .Replace(" }", "\n}")
+            .Replace("} ", "}\n")
+            .Replace(") {", ") {\n    ")
+            .Replace("else {", "else {\n    ")
+            .Replace("| ", "|\n    ");
+        
+        // HTML encode and preserve whitespace
+        formatted = System.Web.HttpUtility.HtmlEncode(formatted);
+        formatted = formatted.Replace("\n", "<br/>").Replace("    ", "&nbsp;&nbsp;&nbsp;&nbsp;");
+        
+        return new MarkupString(formatted);
     }
 
     public void Dispose()

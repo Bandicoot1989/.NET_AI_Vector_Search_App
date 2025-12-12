@@ -3,7 +3,7 @@
 ## Operations One Centre - Información de Despliegue en Azure
 
 **Documento creado:** 10 Diciembre 2025  
-**Última actualización:** 11 Diciembre 2025
+**Última actualización:** 12 Diciembre 2025
 
 ---
 
@@ -14,7 +14,7 @@
 | **Suscripción Azure** | Grupo Antolin ITHQ PoCs |
 | **Grupo de Recursos** | `rg-hq-helpdeskai-poc-001` |
 | **Nombre de Web App** | `powershell-scripts-helpdesk` |
-| **URL de la aplicación** | https://powershell-scripts-helpdesk.germanywestcentral-01.azurewebsites.net |
+| **URL de la aplicación** | https://powershell-scripts-helpdesk-f0h8h6ekcsb5amhn.germanywestcentral-01.azurewebsites.net |
 | **Región** | Germany West Central |
 | **Runtime** | .NET 10 |
 | **Tipo de App Service** | Blazor Server (InteractiveServer) |
@@ -56,25 +56,40 @@ dotnet publish -c Release -o ../publish
 
 #### 3. Desplegar desde la carpeta publish
 
+> ⚠️ **IMPORTANTE: Problema de SSL con Proxy Corporativo (Zscaler)**
+> 
+> Si estás detrás de un proxy corporativo, puede que recibas el error:
+> ```
+> SSL: CERTIFICATE_VERIFY_FAILED - unable to get local issuer certificate
+> ```
+> 
+> **✅ Solución (Bundle de certificados incluido en el proyecto):**
+> ```powershell
+> cd c:\Users\osmany.fajardo\repos\.NET_AI_Vector_Search_App
+> $env:REQUESTS_CA_BUNDLE = "$PWD\combined_ca_bundle.pem"
+> ```
+> 
+> El bundle `combined_ca_bundle.pem` ya está en la raíz del repositorio e incluye los certificados CA de Python + Zscaler. Ver más opciones en la sección [🔐 Configurar Certificados SSL para Proxy](#-configurar-certificados-ssl-para-proxy).
+
 ```powershell
+# Navegar al proyecto
+cd c:\Users\osmany.fajardo\repos\.NET_AI_Vector_Search_App
+
+# Configurar certificado SSL para Zscaler (usar bundle combinado)
+$env:REQUESTS_CA_BUNDLE = "$PWD\combined_ca_bundle.pem"
+
 # Navegar a la carpeta publish
-cd c:\Users\osmany.fajardo\repos\.NET_AI_Vector_Search_App\publish
+cd publish
 
 # Comprimir el contenido para despliegue
 Compress-Archive -Path .\* -DestinationPath ..\app.zip -Force
 
-# Desplegar usando zip deploy
+# Desplegar usando el nuevo comando (recomendado)
 az webapp deploy `
   --resource-group rg-hq-helpdeskai-poc-001 `
   --name powershell-scripts-helpdesk `
   --src-path ..\app.zip `
   --type zip
-
-# O usar el comando de deployment directo
-az webapp deployment source config-zip `
-  --resource-group rg-hq-helpdeskai-poc-001 `
-  --name powershell-scripts-helpdesk `
-  --src ..\app.zip
 ```
 
 #### 4. Reiniciar la aplicación (opcional)
@@ -222,7 +237,119 @@ Write-Host "🔄 Reiniciando aplicación..." -ForegroundColor Cyan
 az webapp restart --resource-group $resourceGroup --name $appName
 
 Write-Host "✅ Despliegue completado!" -ForegroundColor Green
-Write-Host "🌐 URL: https://$appName.germanywestcentral-01.azurewebsites.net" -ForegroundColor Cyan
+Write-Host "🌐 URL: https://powershell-scripts-helpdesk-f0h8h6ekcsb5amhn.germanywestcentral-01.azurewebsites.net" -ForegroundColor Cyan
+```
+
+---
+
+## 🔐 Configurar Certificados SSL para Proxy
+
+Si estás detrás de un proxy corporativo (como **Zscaler**), Azure CLI no puede verificar los certificados SSL porque el proxy intercepta el tráfico con su propio certificado.
+
+> 📁 **Nota**: El proyecto incluye los siguientes archivos de certificado en la raíz del repositorio:
+> - `zscale_root_CA.cer` - Certificado raíz de Zscaler (formato PEM)
+> - `combined_ca_bundle.pem` - **Bundle combinado** (certificados CA de Python + Zscaler)
+
+### Opción 1: Usar el Bundle Combinado (✅ Recomendado)
+
+El bundle combinado incluye los certificados CA raíz de Python (`certifi`) junto con el certificado de Zscaler. Esta es la solución más robusta porque Azure CLI puede verificar tanto los certificados de Microsoft como los de Zscaler.
+
+```powershell
+# Navegar al proyecto
+cd c:\Users\osmany.fajardo\repos\.NET_AI_Vector_Search_App
+
+# Configurar variable de entorno (temporal - sesión actual)
+$env:REQUESTS_CA_BUNDLE = "$PWD\combined_ca_bundle.pem"
+
+# Verificar que funciona (sin warnings de SSL)
+az account show
+
+# Ahora puedes ejecutar comandos de despliegue normalmente
+az webapp deploy --resource-group rg-hq-helpdeskai-poc-001 --name powershell-scripts-helpdesk --src-path app.zip --type zip
+```
+
+> ⚠️ **¿Por qué no usar solo `zscale_root_CA.cer`?**  
+> El certificado de Zscaler solo permite verificar conexiones interceptadas por el proxy, pero Azure CLI también necesita los certificados CA raíz estándar para verificar `management.azure.com` y otros servicios de Microsoft.
+
+### Opción 2: Configuración Permanente (Ya configurada ✅)
+
+La variable de entorno `REQUESTS_CA_BUNDLE` ya está configurada permanentemente para el usuario actual:
+
+```powershell
+# Verificar configuración actual
+[Environment]::GetEnvironmentVariable("REQUESTS_CA_BUNDLE", "User")
+# Resultado: C:\Users\osmany.fajardo\repos\.NET_AI_Vector_Search_App\combined_ca_bundle.pem
+```
+
+Si necesitas reconfigurarla manualmente:
+
+```powershell
+# Configurar variable de entorno del usuario (permanente)
+$bundlePath = "C:\Users\osmany.fajardo\repos\.NET_AI_Vector_Search_App\combined_ca_bundle.pem"
+[Environment]::SetEnvironmentVariable("REQUESTS_CA_BUNDLE", $bundlePath, "User")
+
+# Reiniciar PowerShell/VS Code para que tome efecto
+```
+
+### Opción 3: Regenerar el Bundle Combinado
+
+Si necesitas regenerar el bundle (por ejemplo, si `certifi` se actualiza o el certificado de Zscaler cambia):
+
+```powershell
+# Obtener ubicación del cacert.pem de Python
+$cacertPath = python -c "import certifi; print(certifi.where())"
+
+# Definir rutas
+$zscalerPath = "C:\Users\osmany.fajardo\repos\.NET_AI_Vector_Search_App\zscale_root_CA.cer"
+$combinedPath = "C:\Users\osmany.fajardo\repos\.NET_AI_Vector_Search_App\combined_ca_bundle.pem"
+
+# Combinar certificados
+$cacert = Get-Content $cacertPath -Raw
+$zscaler = Get-Content $zscalerPath -Raw
+Set-Content -Path $combinedPath -Value ($cacert + "`n`n# Zscaler Root CA`n" + $zscaler) -NoNewline
+
+Write-Host "Bundle combinado regenerado en: $combinedPath"
+```
+
+### Opción 4: Exportar Manualmente desde Windows (Si necesitas regenerar)
+
+Si el certificado del proyecto no funciona o necesitas uno nuevo:
+
+```powershell
+# Abrir el administrador de certificados
+certmgr.msc
+```
+
+1. Navega a: **Entidades de certificación raíz de confianza** → **Certificados**
+2. Busca el certificado de **Zscaler** (puede llamarse "Zscaler Root CA" o similar)
+3. Click derecho → **Todas las tareas** → **Exportar...**
+4. Selecciona: **X.509 codificado en base 64 (.CER)**
+5. Guarda como: `zscale_root_CA.cer` en la raíz del proyecto
+
+### Opción 5: Deshabilitar Verificación SSL (⛔ NO RECOMENDADO)
+
+> ⛔ **Ya no es necesario usar esta opción.** Con el bundle combinado configurado, Azure CLI funciona correctamente sin deshabilitar la verificación SSL.
+
+```powershell
+# Solo para la sesión actual de PowerShell (NO USAR si tienes el bundle configurado)
+$env:AZURE_CLI_DISABLE_CONNECTION_VERIFICATION = "1"
+
+# Ejecutar comandos de Azure CLI...
+az webapp deploy ...
+
+# Después de terminar, limpiar la variable (recomendado)
+Remove-Item Env:AZURE_CLI_DISABLE_CONNECTION_VERIFICATION
+```
+
+> ⚠️ **Advertencia**: Deshabilitar la verificación SSL te hace vulnerable a ataques man-in-the-middle. Usa esta opción solo como último recurso y en redes de confianza.
+
+### Verificar la Configuración
+
+```powershell
+# Verificar que Azure CLI funciona correctamente
+az account show
+
+# Si funciona sin warnings de SSL, la configuración es correcta
 ```
 
 ---
@@ -236,6 +363,34 @@ Write-Host "🌐 URL: https://$appName.germanywestcentral-01.azurewebsites.net" 
 → Revisar logs con `az webapp log tail`. Posibles causas:
 - Variables de entorno faltantes
 - Error en la compilación
+- **Error de Dependency Injection** (ver siguiente sección)
+
+### Error: "Unable to resolve service for type 'IXxxService'"
+
+Este error ocurre cuando un nuevo servicio se añade al constructor de un componente pero no está registrado correctamente en el contenedor de DI.
+
+**Síntoma en logs:**
+```
+System.InvalidOperationException: Unable to resolve service for type 'RecipeSearchWeb.Interfaces.ITicketLookupService' 
+while attempting to activate 'RecipeSearchWeb.Services.KnowledgeAgentService'
+```
+
+**Causa:** En .NET Core DI, los parámetros nullable (`IService?`) **NO son opcionales automáticamente**. El contenedor DI intenta resolverlos de todas formas.
+
+**Solución:** Usar una factory en el registro del servicio:
+
+```csharp
+// ❌ MAL - DI intenta resolver TODOS los parámetros
+services.AddSingleton<MyService>();
+
+// ✅ BIEN - Usar factory con GetService para opcionales
+services.AddSingleton<MyService>(sp => new MyService(
+    sp.GetRequiredService<IRequiredDependency>(),  // Obligatorio
+    sp.GetService<IOptionalDependency>()           // Opcional (puede ser null)
+));
+```
+
+**Archivo a modificar:** `Extensions/DependencyInjection.cs`
 
 ### La aplicación tarda en cargar
 → El primer request después de inactividad despierta el App Service (cold start). Esto es normal en planes gratuitos/básicos.

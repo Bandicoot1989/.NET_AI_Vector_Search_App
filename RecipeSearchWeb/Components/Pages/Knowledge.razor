@@ -16,26 +16,15 @@
 
 <div class="md-page">
     <div class="md-page-header">
-        <div style="display: flex; align-items: center; justify-content: space-between;">
-            <div>
-                <h1 class="md-page-title">
-                    <span class="material-symbols-outlined">menu_book</span>
-                    Knowledge Base
-                </h1>
-                <p class="md-page-subtitle">Documentation and procedures for daily operations</p>
-            </div>
-            @if (currentUser?.IsAdmin == true)
-            {
-                <button class="md-btn-tonal" @onclick="GoToAdmin">
-                    <span class="material-symbols-outlined" style="font-size: 18px;">settings</span>
-                    Admin
-                </button>
-            }
-        </div>
+        <h1 class="md-page-title">
+            <span class="material-symbols-outlined">menu_book</span>
+            Knowledge Base
+        </h1>
+        <p class="md-page-subtitle">Documentation and procedures for daily operations</p>
     </div>
 
-    <div class="md-search-container">
-        <div class="md-search-box">
+    <div class="md-search-container" style="display: flex; align-items: center; gap: 16px;">
+        <div class="md-search-box" style="flex: 1;">
             <span class="material-symbols-outlined md-search-icon">search</span>
             <input 
                 type="text" 
@@ -51,21 +40,28 @@
                 </button>
             }
         </div>
-        <div class="md-search-stats">
-            @if (isSearching)
-            {
-                <span class="material-symbols-outlined" style="font-size: 16px; animation: spin 1s linear infinite;">sync</span>
-                <span>Searching...</span>
-            }
-            else if (!string.IsNullOrWhiteSpace(searchQuery))
-            {
-                <span>Found @filteredArticles.Count articles</span>
-            }
-            else
-            {
-                <span>@allArticles.Count total articles • Select a category or search</span>
-            }
-        </div>
+        @if (currentUser?.IsAdmin == true)
+        {
+            <button class="md-btn-tonal" @onclick="GoToAdmin">
+                <span class="material-symbols-outlined" style="font-size: 18px;">settings</span>
+                Admin
+            </button>
+        }
+    </div>
+    <div class="md-search-stats">
+        @if (isSearching)
+        {
+            <span class="material-symbols-outlined" style="font-size: 16px; animation: spin 1s linear infinite;">sync</span>
+            <span>Searching...</span>
+        }
+        else if (!string.IsNullOrWhiteSpace(searchQuery))
+        {
+            <span>Found @filteredArticles.Count articles</span>
+        }
+        else
+        {
+            <span>@allArticles.Count total articles • Select a category or search</span>
+        }
     </div>
 
     @if (!string.IsNullOrWhiteSpace(searchQuery) && filteredArticles.Any())

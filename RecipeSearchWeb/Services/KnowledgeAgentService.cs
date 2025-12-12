@@ -110,11 +110,20 @@ Te recomiendo abrir un ticket en el portal de soporte para que el equipo de IT p
 - These are suggestions from resolved incidents, NOT official documentation
 - Use them as troubleshooting hints when no official documentation exists
 - Always mention they are based on previous tickets
-- Format: 'Basado en incidencias previas (Ticket #ID), este problema suele resolverse...'";
+- Format: 'Basado en incidencias previas (Ticket #ID), este problema suele resolverse...'
+
+### Specific Ticket Queries (When user asks about MT-12345, MTT-67890, etc.)
+- If the user references a specific ticket number (e.g., 'ayuda con MT-799225')
+- You will receive real-time ticket information directly from Jira
+- Summarize the ticket status, priority, and description clearly
+- If similar solved tickets are provided, suggest how those solutions might apply
+- Include the direct link to the Jira ticket
+- Be proactive: suggest next steps based on the ticket status and history";
 
     private readonly QueryCacheService? _cacheService;
     private readonly FeedbackService? _feedbackService;
     private readonly IJiraSolutionService? _jiraSolutionService;
+    private readonly ITicketLookupService? _ticketLookupService;
 
     // Confidence threshold for feedback loop - if best score is below this, suggest opening a ticket
     private const double ConfidenceThreshold = 0.65;
@@ -130,6 +139,7 @@ Te recomiendo abrir un ticket en el portal de soporte para que el equipo de IT p
         QueryCacheService? cacheService,
         FeedbackService? feedbackService,
         IJiraSolutionService? jiraSolutionService,
+        ITicketLookupService? ticketLookupService,
         ILogger<KnowledgeAgentService> logger)
     {
         // IMPORTANT: GPT_NAME is for embeddings, CHAT_NAME is for chat completions
@@ -146,12 +156,14 @@ Te recomiendo abrir un ticket en el portal de soporte para que el equipo de IT p
         _cacheService = cacheService;
         _feedbackService = feedbackService;
         _jiraSolutionService = jiraSolutionService;
+        _ticketLookupService = ticketLookupService;
         
-        _logger.LogInformation("Services: Confluence={Confluence}, Cache={Cache}, Feedback={Feedback}, JiraSolutions={Jira}", 
+        _logger.LogInformation("Services: Confluence={Confluence}, Cache={Cache}, Feedback={Feedback}, JiraSolutions={Jira}, TicketLookup={TicketLookup}", 
             confluenceService?.IsConfigured == true ? "Configured" : "Not configured",
             cacheService != null ? "Enabled" : "Disabled",
             feedbackService != null ? "Enabled" : "Disabled",
-            jiraSolutionService != null ? "Enabled" : "Disabled");
+            jiraSolutionService != null ? "Enabled" : "Disabled",
+            ticketLookupService != null ? "Enabled" : "Disabled");
     }
 
     #region Query Analysis (Tier 1 Optimizations)
@@ -162,6 +174,7 @@ Te recomiendo abrir un ticket en el portal de soporte para que el equipo de IT p
     private enum QueryIntent
     {
         TicketRequest,      // User wants to open a ticket
+        TicketLookup,       // User is asking about a specific ticket (e.g., MT-12345)
         HowTo,              // User wants step-by-step instructions
         Information,        // User wants general information
         Lookup,             // User wants to look up a specific code/name (centre, company)
@@ -189,7 +202,14 @@ Te recomiendo abrir un ticket en el portal de soporte para que el equipo de IT p
     {
         var lower = query.ToLowerInvariant();
         
-        // Ticket request indicators
+        // === TICKET LOOKUP: Check if user is asking about a specific ticket (MT-12345, MTT-12345, etc.) ===
+        // This takes priority as it's a very specific request
+        if (_ticketLookupService?.ContainsTicketReference(query) == true)
+        {
+            return QueryIntent.TicketLookup;
+        }
+        
+        // Ticket request indicators (user wants to OPEN a ticket, not look one up)
         if (lower.Contains("ticket") || lower.Contains("abrir") || lower.Contains("solicitar") ||
             lower.Contains("request") || lower.Contains("open") || lower.Contains("crear solicitud") ||
             lower.Contains("formulario") || lower.Contains("form"))
@@ -231,6 +251,15 @@ Te recomiendo abrir un ticket en el portal de soporte para que el equipo de IT p
     {
         return intent switch
         {
+            QueryIntent.TicketLookup => new SearchWeights
+            {
+                JiraTicketWeight = 0.5,      // We already have the ticket data, lower priority for forms
+                ConfluenceWeight = 2.0,      // Want related documentation
+                KBWeight = 1.5,              // Want KB solutions
+                ReferenceDataWeight = 0.3,
+                JiraTopResults = 3,
+                ConfluenceTopResults = 5
+            },
             QueryIntent.TicketRequest => new SearchWeights
             {
                 JiraTicketWeight = 2.5,      // Strong priority for tickets
@@ -516,6 +545,163 @@ Usa el ejemplo anterior como guía para el tono, formato y nivel de detalle.";
             _logger.LogInformation("Query analysis: Intent={Intent}, Weights=[Jira:{JiraW}, Confluence:{ConfW}, Ref:{RefW}]",
                 intent, weights.JiraTicketWeight, weights.ConfluenceWeight, weights.ReferenceDataWeight);
             
+            // === TICKET LOOKUP: Handle direct ticket reference queries ===
+            if (intent == QueryIntent.TicketLookup && _ticketLookupService != null)
+            {
+                _logger.LogInformation("Ticket lookup detected - fetching ticket information directly from Jira");
+                
+                var ticketIds = _ticketLookupService.ExtractTicketIds(question);
+                if (ticketIds.Any())
+                {
+                    var ticketLookupResult = await _ticketLookupService.LookupTicketsAsync(ticketIds);
+                    
+                    if (ticketLookupResult.Success && ticketLookupResult.Tickets.Any())
+                    {
+                        // Build ticket context for AI
+                        var ticketContextBuilder = new StringBuilder();
+                        ticketContextBuilder.AppendLine("\n\n## 🎫 INFORMACIÓN DEL TICKET CONSULTADO:");
+                        ticketContextBuilder.AppendLine("(Esta información fue recuperada directamente de Jira en tiempo real)\n");
+                        
+                        foreach (var ticket in ticketLookupResult.Tickets)
+                        {
+                            ticketContextBuilder.AppendLine($"### Ticket: {ticket.TicketId}");
+                            ticketContextBuilder.AppendLine($"**Resumen:** {ticket.Summary}");
+                            ticketContextBuilder.AppendLine($"**Estado:** {ticket.Status}");
+                            ticketContextBuilder.AppendLine($"**Prioridad:** {ticket.Priority}");
+                            ticketContextBuilder.AppendLine($"**Reportador:** {ticket.Reporter}");
+                            ticketContextBuilder.AppendLine($"**Asignado a:** {ticket.Assignee ?? "Sin asignar"}");
+                            ticketContextBuilder.AppendLine($"**Fecha de creación:** {ticket.Created:yyyy-MM-dd HH:mm}");
+                            if (ticket.Resolved.HasValue)
+                                ticketContextBuilder.AppendLine($"**Resuelto:** {ticket.Resolved:yyyy-MM-dd HH:mm}");
+                            ticketContextBuilder.AppendLine($"**Enlace:** {ticket.JiraUrl}");
+                            
+                            if (!string.IsNullOrWhiteSpace(ticket.DetectedSystem))
+                                ticketContextBuilder.AppendLine($"**Sistema detectado:** {ticket.DetectedSystem}");
+                            
+                            ticketContextBuilder.AppendLine($"\n**Descripción:**\n{ticket.Description ?? "(Sin descripción)"}");
+                            
+                            if (ticket.Comments?.Any() == true)
+                            {
+                                ticketContextBuilder.AppendLine("\n**Comentarios recientes:**");
+                                foreach (var comment in ticket.Comments.Take(5))
+                                {
+                                    ticketContextBuilder.AppendLine($"- **{comment.Author}** ({comment.Created:yyyy-MM-dd HH:mm}): {comment.Body}");
+                                }
+                            }
+                            ticketContextBuilder.AppendLine();
+                        }
+                        
+                        // Add similar solved tickets for context
+                        if (ticketLookupResult.SimilarSolutions?.Any() == true)
+                        {
+                            ticketContextBuilder.AppendLine("\n## 📋 TICKETS SIMILARES RESUELTOS:");
+                            ticketContextBuilder.AppendLine("(Estas soluciones pueden ser útiles para este ticket)\n");
+                            
+                            foreach (var similar in ticketLookupResult.SimilarSolutions)
+                            {
+                                ticketContextBuilder.AppendLine($"- **{similar.TicketId}**: {similar.Summary}");
+                                ticketContextBuilder.AppendLine($"  *Relevancia: {similar.SimilarityScore:P0}*");
+                                ticketContextBuilder.AppendLine($"  **Solución aplicada:** {similar.Solution}");
+                                ticketContextBuilder.AppendLine();
+                            }
+                        }
+                        
+                        var ticketContext = ticketContextBuilder.ToString();
+                        
+                        // Now do a quick search for related documentation
+                        var relatedSearchTask = _knowledgeService.SearchArticlesAsync(
+                            ticketLookupResult.Tickets.First().Summary, topResults: 3);
+                        var confluenceRelatedTask = SearchConfluenceParallelAsync(
+                            ticketLookupResult.Tickets.First().Summary, 
+                            ticketLookupResult.Tickets.First().Summary, 
+                            QueryIntent.Troubleshooting, 
+                            weights);
+                        
+                        await Task.WhenAll(relatedSearchTask, confluenceRelatedTask);
+                        
+                        var relatedArticles = await relatedSearchTask;
+                        var relatedConfluence = await confluenceRelatedTask;
+                        
+                        // Build context from related docs
+                        var relatedContext = BuildContextWeighted(relatedArticles, new List<ContextDocument>(), relatedConfluence, weights);
+                        
+                        // Create specialized system prompt for ticket lookup
+                        var ticketSystemPrompt = SystemPrompt + @"
+
+## INSTRUCCIONES ESPECIALES PARA CONSULTA DE TICKET:
+El usuario está preguntando sobre un ticket específico de Jira. Se te ha proporcionado:
+1. **Información completa del ticket** recuperada en tiempo real de Jira
+2. **Tickets similares ya resueltos** que pueden servir como referencia
+3. **Documentación relacionada** de la base de conocimientos
+
+Tu respuesta debe:
+- Resumir el estado actual del ticket de forma clara
+- Si el ticket está abierto, sugerir pasos para su resolución basándote en tickets similares y la documentación
+- Si hay soluciones de tickets similares, explica cómo podrían aplicarse a este caso
+- Incluir el enlace al ticket para referencia
+- Ser proactivo sugiriendo acciones concretas
+
+NO digas que no tienes acceso al ticket - la información ya está en el contexto.";
+                        
+                        // Build messages
+                        var ticketMessages = new List<ChatMessage>
+                        {
+                            new SystemChatMessage(ticketSystemPrompt)
+                        };
+                        
+                        // Add context as assistant message
+                        ticketMessages.Add(new UserChatMessage($"Contexto relevante:\n{relatedContext}\n{ticketContext}"));
+                        ticketMessages.Add(new AssistantChatMessage("Entendido, tengo la información del ticket y el contexto relacionado."));
+                        ticketMessages.Add(new UserChatMessage(question));
+                        
+                        // Call OpenAI
+                        var ticketResponse = await _chatClient.CompleteChatAsync(ticketMessages);
+                        var ticketAnswer = ticketResponse.Value.Content[0].Text;
+                        
+                        stopwatch.Stop();
+                        _logger.LogInformation("Ticket lookup response generated in {Ms}ms for tickets: {Tickets}", 
+                            stopwatch.ElapsedMilliseconds, string.Join(", ", ticketIds));
+                        
+                        return new AgentResponse
+                        {
+                            Answer = ticketAnswer,
+                            RelevantArticles = relatedArticles.Select(a => new ArticleReference
+                            {
+                                Title = a.Title,
+                                KBNumber = a.Id.ToString(),
+                                Score = (float)a.SearchScore
+                            }).ToList(),
+                            ConfluenceSources = relatedConfluence.Select(c => new ConfluenceReference
+                            {
+                                Title = c.Title,
+                                WebUrl = c.WebUrl
+                            }).ToList(),
+                            Success = true,
+                            FromCache = false
+                        };
+                    }
+                    else
+                    {
+                        // Ticket not found - provide helpful response
+                        _logger.LogWarning("Ticket lookup failed: {ErrorMessage}", ticketLookupResult.ErrorMessage);
+                        
+                        return new AgentResponse
+                        {
+                            Answer = $"No pude encontrar el ticket **{string.Join(", ", ticketIds)}** en Jira. " +
+                                    "Esto puede deberse a que:\n" +
+                                    "- El número de ticket no es correcto\n" +
+                                    "- El ticket fue eliminado o archivado\n" +
+                                    "- No tengo permisos para acceder a ese proyecto\n\n" +
+                                    "¿Podrías verificar el número de ticket o proporcionar más detalles sobre el problema?",
+                            RelevantArticles = new List<ArticleReference>(),
+                            ConfluenceSources = new List<ConfluenceReference>(),
+                            Success = true,
+                            LowConfidence = true
+                        };
+                    }
+                }
+            }
+            
             // === TIER 1 OPTIMIZATION: Query Decomposition ===
             var subQueries = DecomposeQuery(question);
             
@@ -723,12 +909,168 @@ Please answer based on the context provided above. If there's a relevant ticket 
         
         try
         {
-            _logger.LogInformation("AskWithSpecialist: Specialist={Specialist}, Question='{Question}'", 
-                specialist, question.Length > 50 ? question.Substring(0, 50) + "..." : question);
+            _logger.LogInformation("AskWithSpecialist: Specialist={Specialist}, Question='{Question}', TicketLookupService={TicketService}", 
+                specialist, 
+                question.Length > 50 ? question.Substring(0, 50) + "..." : question,
+                _ticketLookupService != null ? "Available" : "NULL");
 
             // === FULL SEARCH: Same as General Agent ===
             var intent = DetectIntent(question);
             var weights = GetSearchWeights(intent);
+            
+            _logger.LogInformation("AskWithSpecialist Intent Detection: Intent={Intent}, Question contains ticket pattern={HasPattern}", 
+                intent, 
+                _ticketLookupService?.ContainsTicketReference(question) ?? false);
+            
+            // === TICKET LOOKUP: Handle direct ticket reference queries ===
+            // This MUST be checked before other search logic
+            if (intent == QueryIntent.TicketLookup && _ticketLookupService != null)
+            {
+                _logger.LogInformation("🎫 TICKET LOOKUP TRIGGERED - fetching ticket information directly from Jira");
+                
+                var ticketIds = _ticketLookupService.ExtractTicketIds(question);
+                _logger.LogInformation("🎫 Extracted ticket IDs: {TicketIds}", string.Join(", ", ticketIds));
+                
+                if (ticketIds.Any())
+                {
+                    var ticketLookupResult = await _ticketLookupService.LookupTicketsAsync(ticketIds);
+                    _logger.LogInformation("🎫 Ticket lookup result: Success={Success}, TicketCount={Count}, Error={Error}", 
+                        ticketLookupResult.Success, 
+                        ticketLookupResult.Tickets?.Count ?? 0,
+                        ticketLookupResult.ErrorMessage ?? "none");
+                    
+                    if (ticketLookupResult.Success && ticketLookupResult.Tickets?.Any() == true)
+                    {
+                        // Build ticket context for AI
+                        var ticketContextBuilder = new StringBuilder();
+                        ticketContextBuilder.AppendLine("\n\n## 🎫 INFORMACIÓN DEL TICKET CONSULTADO:");
+                        ticketContextBuilder.AppendLine("(Esta información fue recuperada directamente de Jira en tiempo real)\n");
+                        
+                        foreach (var ticket in ticketLookupResult.Tickets)
+                        {
+                            ticketContextBuilder.AppendLine($"### Ticket: {ticket.TicketId}");
+                            ticketContextBuilder.AppendLine($"**Resumen:** {ticket.Summary}");
+                            ticketContextBuilder.AppendLine($"**Estado:** {ticket.Status}");
+                            ticketContextBuilder.AppendLine($"**Prioridad:** {ticket.Priority}");
+                            ticketContextBuilder.AppendLine($"**Reportador:** {ticket.Reporter}");
+                            ticketContextBuilder.AppendLine($"**Asignado a:** {ticket.Assignee ?? "Sin asignar"}");
+                            ticketContextBuilder.AppendLine($"**Fecha de creación:** {ticket.Created:yyyy-MM-dd HH:mm}");
+                            if (ticket.Resolved.HasValue)
+                                ticketContextBuilder.AppendLine($"**Resuelto:** {ticket.Resolved:yyyy-MM-dd HH:mm}");
+                            ticketContextBuilder.AppendLine($"**Enlace:** {ticket.JiraUrl}");
+                            
+                            if (!string.IsNullOrWhiteSpace(ticket.DetectedSystem))
+                                ticketContextBuilder.AppendLine($"**Sistema detectado:** {ticket.DetectedSystem}");
+                            
+                            ticketContextBuilder.AppendLine($"\n**Descripción:**\n{ticket.Description ?? "(Sin descripción)"}");
+                            
+                            if (ticket.Comments?.Any() == true)
+                            {
+                                ticketContextBuilder.AppendLine("\n**Comentarios recientes:**");
+                                foreach (var comment in ticket.Comments.Take(5))
+                                {
+                                    ticketContextBuilder.AppendLine($"- **{comment.Author}** ({comment.Created:yyyy-MM-dd HH:mm}): {comment.Body}");
+                                }
+                            }
+                            ticketContextBuilder.AppendLine();
+                        }
+                        
+                        // Add similar solved tickets for context
+                        if (ticketLookupResult.SimilarSolutions?.Any() == true)
+                        {
+                            ticketContextBuilder.AppendLine("\n## 📋 TICKETS SIMILARES RESUELTOS:");
+                            ticketContextBuilder.AppendLine("(Estas soluciones pueden ser útiles para este ticket)\n");
+                            
+                            foreach (var similar in ticketLookupResult.SimilarSolutions)
+                            {
+                                ticketContextBuilder.AppendLine($"- **{similar.TicketId}**: {similar.Summary}");
+                                ticketContextBuilder.AppendLine($"  *Relevancia: {similar.SimilarityScore:P0}*");
+                                ticketContextBuilder.AppendLine($"  **Solución aplicada:** {similar.Solution}");
+                                ticketContextBuilder.AppendLine();
+                            }
+                        }
+                        
+                        var ticketContext = ticketContextBuilder.ToString();
+                        
+                        // Now do a quick search for related documentation
+                        var relatedSearchTask = _knowledgeService.SearchArticlesAsync(
+                            ticketLookupResult.Tickets.First().Summary, topResults: 3);
+                        var confluenceRelatedTask = SearchConfluenceParallelAsync(
+                            ticketLookupResult.Tickets.First().Summary, 
+                            ticketLookupResult.Tickets.First().Summary, 
+                            QueryIntent.Troubleshooting, 
+                            weights);
+                        
+                        await Task.WhenAll(relatedSearchTask, confluenceRelatedTask);
+                        
+                        var relatedArticles = await relatedSearchTask;
+                        var relatedConfluence = await confluenceRelatedTask;
+                        
+                        // Build context from related docs
+                        var relatedContext = BuildContextWeighted(relatedArticles, new List<ContextDocument>(), relatedConfluence, weights);
+                        
+                        // Create specialized system prompt for ticket lookup
+                        var ticketSystemPrompt = SystemPrompt + @"
+
+## INSTRUCCIONES ESPECIALES PARA CONSULTA DE TICKET:
+El usuario está preguntando sobre un ticket específico de Jira. Se te ha proporcionado:
+1. **Información completa del ticket** recuperada en tiempo real de Jira
+2. **Tickets similares ya resueltos** que pueden servir como referencia
+3. **Documentación relacionada** de la base de conocimientos
+
+Tu respuesta debe:
+- Resumir el estado actual del ticket de forma clara
+- Si el ticket está abierto, sugerir pasos para su resolución basándote en tickets similares y la documentación
+- Si hay soluciones de tickets similares, explica cómo podrían aplicarse a este caso
+- Incluir el enlace al ticket para referencia
+- Ser proactivo sugiriendo acciones concretas
+
+NO digas que no tienes acceso al ticket - la información ya está en el contexto.";
+                        
+                        // Build messages
+                        var ticketMessages = new List<ChatMessage>
+                        {
+                            new SystemChatMessage(ticketSystemPrompt)
+                        };
+                        
+                        // Add context as assistant message
+                        ticketMessages.Add(new UserChatMessage($"Contexto relevante:\n{relatedContext}\n{ticketContext}"));
+                        ticketMessages.Add(new AssistantChatMessage("Entendido, tengo la información del ticket y el contexto relacionado."));
+                        ticketMessages.Add(new UserChatMessage(question));
+                        
+                        // Call OpenAI
+                        var ticketResponse = await _chatClient.CompleteChatAsync(ticketMessages);
+                        var ticketAnswer = ticketResponse.Value.Content[0].Text;
+                        
+                        stopwatch.Stop();
+                        _logger.LogInformation("Ticket lookup response (via Specialist) generated in {Ms}ms for tickets: {Tickets}", 
+                            stopwatch.ElapsedMilliseconds, string.Join(", ", ticketIds));
+                        
+                        return new AgentResponse
+                        {
+                            Answer = ticketAnswer,
+                            RelevantArticles = relatedArticles.Select(a => new ArticleReference
+                            {
+                                Title = a.Title,
+                                KBNumber = a.Id.ToString(),
+                                Score = (float)a.SearchScore
+                            }).ToList(),
+                            ConfluenceSources = relatedConfluence.Select(c => new ConfluenceReference
+                            {
+                                Title = c.Title,
+                                WebUrl = c.WebUrl
+                            }).ToList(),
+                            Success = true,
+                            FromCache = false
+                        };
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Ticket lookup failed or no tickets found for: {TicketIds}", string.Join(", ", ticketIds));
+                    }
+                }
+            }
+            
             var subQueries = DecomposeQuery(question);
             var expandedQuery = ExpandQueryWithSynonyms(question);
             
