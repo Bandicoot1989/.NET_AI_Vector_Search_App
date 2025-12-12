@@ -9,6 +9,7 @@ logs*/
 logs-latest/
 webapp-logs/
 webapp-logs*/
+azure-logs/
 
 # Test projects with sensitive data
 TestConfluence/
